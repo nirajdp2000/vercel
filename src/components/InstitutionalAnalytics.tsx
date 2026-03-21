@@ -84,32 +84,26 @@ export const InstitutionalAnalytics: React.FC<InstitutionalAnalyticsProps> = ({
   const softClass = isLight ? 'text-zinc-600' : 'text-white/40';
 
   useEffect(() => {
-    if (!candles.length) {
-      setOrderBook({ bids: [], asks: [] });
-      setImbalanceData(null);
-      setVolumeProfile(emptyVolumeProfile);
-      return;
-    }
-
     let active = true;
-    const lastPrice = candles[candles.length - 1].close;
+    const lastPrice = candles.length > 0 ? candles[candles.length - 1].close : 0;
 
     const loadOrderFlow = async () => {
       try {
         const ikParam = instrumentKey ? `&instrumentKey=${encodeURIComponent(instrumentKey)}` : '';
+        const lastPriceParam = lastPrice > 0 ? lastPrice : 100;
         const [book, profile, micro, rotation] = await Promise.all([
-          fetchJson<OrderBook>(`/api/institutional/order-book?lastPrice=${lastPrice}${ikParam}`),
-          InstitutionalService.calculateVolumeProfile(candles, 2),
-          fetchJson<{ frequency: number; spread: number; accumulation: number }>(`/api/institutional/microstructure?lastPrice=${lastPrice}${ikParam}`),
+          fetchJson<OrderBook>(`/api/institutional/order-book?lastPrice=${lastPriceParam}${ikParam}`),
+          candles.length > 0
+            ? InstitutionalService.calculateVolumeProfile(candles, 2)
+            : Promise.resolve(emptyVolumeProfile),
+          fetchJson<{ frequency: number; spread: number; accumulation: number }>(`/api/institutional/microstructure?lastPrice=${lastPriceParam}${ikParam}`),
           InstitutionalService.getSectorRotation()
         ]);
         const imbalance = await InstitutionalService.calculateOrderImbalance(book);
-        if (!active) {
-          return;
-        }
+        if (!active) return;
         setOrderBook(book);
         setImbalanceData(imbalance);
-        setVolumeProfile(profile);
+        if (candles.length > 0) setVolumeProfile(profile);
         setMicrostructure(micro);
         setSectorRotation(rotation);
         setSentimentScore(Math.min(95, Math.max(35, Math.round((micro.accumulation + (rotation[0]?.strength ?? 50)) / 2))));
@@ -127,7 +121,7 @@ export const InstitutionalAnalytics: React.FC<InstitutionalAnalyticsProps> = ({
       active = false;
       window.clearInterval(intervalId);
     };
-  }, [candles, symbol]);
+  }, [candles, symbol, instrumentKey]);
 
   const derived = useMemo(() => {
     const bestBid = orderBook.bids[0]?.price ?? 0;
@@ -207,13 +201,31 @@ export const InstitutionalAnalytics: React.FC<InstitutionalAnalyticsProps> = ({
         <div className="mt-6 grid grid-cols-2 gap-3 xl:grid-cols-4">
           <div className={`rounded-2xl p-4 ${panelClass}`}>
             <p className={`text-[10px] font-bold uppercase tracking-[0.2em] ${softClass}`}>Support Cluster</p>
-            <p className="mt-2 text-lg font-black text-emerald-400">Rs {(derived.support?.price ?? derived.bestBid).toFixed(2)}</p>
-            <p className={`text-[10px] ${mutedClass}`}>{(derived.support?.volume ?? 0).toLocaleString()} bid volume</p>
+            {derived.support ? (
+              <>
+                <p className="mt-2 text-lg font-black text-emerald-400">Rs {derived.support.price.toFixed(2)}</p>
+                <p className={`text-[10px] ${mutedClass}`}>{derived.support.volume.toLocaleString()} bid volume</p>
+              </>
+            ) : (
+              <>
+                <p className="mt-2 text-lg font-black text-zinc-600">—</p>
+                <p className={`text-[10px] ${mutedClass}`}>Loading order book…</p>
+              </>
+            )}
           </div>
           <div className={`rounded-2xl p-4 ${panelClass}`}>
             <p className={`text-[10px] font-bold uppercase tracking-[0.2em] ${softClass}`}>Resistance Cluster</p>
-            <p className="mt-2 text-lg font-black text-rose-400">Rs {(derived.resistance?.price ?? derived.bestAsk).toFixed(2)}</p>
-            <p className={`text-[10px] ${mutedClass}`}>{(derived.resistance?.volume ?? 0).toLocaleString()} ask volume</p>
+            {derived.resistance ? (
+              <>
+                <p className="mt-2 text-lg font-black text-rose-400">Rs {derived.resistance.price.toFixed(2)}</p>
+                <p className={`text-[10px] ${mutedClass}`}>{derived.resistance.volume.toLocaleString()} ask volume</p>
+              </>
+            ) : (
+              <>
+                <p className="mt-2 text-lg font-black text-zinc-600">—</p>
+                <p className={`text-[10px] ${mutedClass}`}>Loading order book…</p>
+              </>
+            )}
           </div>
           <div className={`rounded-2xl p-4 ${panelClass}`}>
             <p className={`text-[10px] font-bold uppercase tracking-[0.2em] ${softClass}`}>Liquidity Gap</p>
