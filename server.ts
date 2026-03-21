@@ -2198,53 +2198,166 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
     });
     
     const ai = new GoogleGenAI({ apiKey });
-    
-    const prompt = `
-        As a world-class financial analyst and technical trader, analyze the following stock data for ${symbol} (${interval} interval).
-        
-        Price Data (last 50 candles):
-        ${JSON.stringify(data.slice(-50).map(c => ({
-          time: c.fullTime,
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close,
-          volume: c.volume
-        })))}
 
-        ${quantData ? `
-        Quant Signals & Market Context:
-        - Market Sentiment: ${quantData.sentiment?.status} (Confidence: ${quantData.sentiment?.confidence}%)
-        - Sector Strength: ${JSON.stringify(quantData.sectors?.slice(0, 3))}
-        - Momentum Alerts: ${JSON.stringify(quantData.momentum?.slice(0, 3))}
-        - Breakout Signals: ${JSON.stringify(quantData.breakouts?.slice(0, 3))}
-        ` : ''}
+    // Compute derived technicals server-side to enrich the prompt
+    const candles50 = data.slice(-50);
+    const candles20 = data.slice(-20);
+    const latestClose = Number(candles50[candles50.length - 1]?.close ?? 0);
+    const prevClose   = Number(candles50[candles50.length - 2]?.close ?? latestClose);
+    const high20 = Math.max(...candles20.map((c: any) => Number(c.high ?? c.close ?? 0)));
+    const low20  = Math.min(...candles20.map((c: any) => Number(c.low  ?? c.close ?? 0)));
+    const avgVol20 = candles20.reduce((s: number, c: any) => s + Number(c.volume ?? 0), 0) / (candles20.length || 1);
+    const latestVol = Number(candles50[candles50.length - 1]?.volume ?? 0);
+    const volRatio   = avgVol20 ? (latestVol / avgVol20).toFixed(2) : "1.00";
+    const pctChange  = prevClose ? (((latestClose - prevClose) / prevClose) * 100).toFixed(2) : "0.00";
+    const ema9 = (() => {
+      const k = 2 / (9 + 1);
+      let ema = Number(candles50[0]?.close ?? latestClose);
+      for (const c of candles50) { ema = Number(c.close) * k + ema * (1 - k); }
+      return ema.toFixed(2);
+    })();
+    const ema21 = (() => {
+      const k = 2 / (21 + 1);
+      let ema = Number(candles50[0]?.close ?? latestClose);
+      for (const c of candles50) { ema = Number(c.close) * k + ema * (1 - k); }
+      return ema.toFixed(2);
+    })();
+    // RSI-14
+    const rsi14 = (() => {
+      const closes = candles50.map((c: any) => Number(c.close ?? 0));
+      if (closes.length < 15) return 50;
+      let gains = 0, losses = 0;
+      for (let i = 1; i <= 14; i++) {
+        const d = closes[i] - closes[i - 1];
+        if (d > 0) gains += d; else losses -= d;
+      }
+      let avgG = gains / 14, avgL = losses / 14;
+      for (let i = 15; i < closes.length; i++) {
+        const d = closes[i] - closes[i - 1];
+        avgG = (avgG * 13 + Math.max(d, 0)) / 14;
+        avgL = (avgL * 13 + Math.max(-d, 0)) / 14;
+      }
+      return avgL === 0 ? 100 : Math.round(100 - 100 / (1 + avgG / avgL));
+    })();
+    // ATR-14
+    const atr14 = (() => {
+      const slice = candles50.slice(-15);
+      let atr = 0;
+      for (let i = 1; i < slice.length; i++) {
+        const h = Number(slice[i].high ?? slice[i].close ?? 0);
+        const l = Number(slice[i].low  ?? slice[i].close ?? 0);
+        const pc = Number(slice[i - 1].close ?? 0);
+        atr += Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
+      }
+      return (atr / 14).toFixed(2);
+    })();
 
-        ${advancedIntelligence ? `
-        Advanced AI Intelligence:
-        - Momentum Prediction: ${advancedIntelligence.momentumPrediction?.probability}% probability of ${advancedIntelligence.momentumPrediction?.predictedMove} move.
-        - Order Flow: ${advancedIntelligence.orderFlow?.status} (Imbalance: ${advancedIntelligence.orderFlow?.imbalance}x)
-        - Pattern Recognition: ${advancedIntelligence.patternRecognition?.pattern} (${advancedIntelligence.patternRecognition?.status})
-        - Smart Money: ${advancedIntelligence.smartMoney?.phase} (Score: ${advancedIntelligence.smartMoney?.accumulationScore})
-        ` : ''}
+    const prompt = `You are a senior quantitative analyst at a top-tier hedge fund specialising in Indian equity markets (NSE/BSE). Perform a full institutional-grade analysis of ${symbol} on the ${interval} timeframe.
 
-      Current Date/Time: ${new Date().toISOString()}
+=== PRICE DATA (last 50 candles) ===
+${JSON.stringify(candles50.map((c: any) => ({ t: c.fullTime, o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume })))}
 
-      Provide a comprehensive analysis including:
-      1. **Actionable Signal**: A single word (BUY, SELL, or HOLD) followed by a 1-sentence "Why".
-      2. **Simple Summary for Beginners**: 3 simple bullet points explaining the situation in plain English.
-      3. **Executive Summary**: A 2-sentence high-level overview.
-      4. **Trend Analysis**: Current trend direction, strength, and potential exhaustion signals.
-      5. **Quant Intelligence Synthesis**: How the quant signals (momentum, order flow, smart money) align with the price action.
-      6. **Psychological Audit**: Analyze the retail vs institutional bias and market sentiment.
-      7. **Key Levels**: Specific Support (S1, S2) and Resistance (R1, R2) levels.
-      8. **Technical Indicators**: Interpretation of price action, volume spikes, and candle patterns.
-      9. **Risk/Reward Assessment**: Optimal entry zones and stop-loss suggestions.
-      10. **Strategic Recommendation**: Clear Buy, Sell, or Hold with a confidence score (0-100%).
-      11. **Market Context (Grounding)**: Incorporate any relevant recent news or macroeconomic factors affecting ${symbol} or its sector.
+=== PRE-COMPUTED TECHNICALS ===
+Current Price : ${latestClose}
+1-bar Change  : ${pctChange}%
+20-bar High   : ${high20} | Low: ${low20}
+EMA-9         : ${ema9}  | EMA-21: ${ema21}
+RSI-14        : ${rsi14}
+ATR-14        : ${atr14}
+Volume Ratio  : ${volRatio}x (vs 20-bar avg)
 
-      Format the response in clean Markdown with professional formatting. Use bolding, tables for levels, and lists for readability.
-    `;
+${quantData ? `=== QUANT SIGNALS ===
+Market Sentiment : ${quantData.sentiment?.status} (Confidence: ${quantData.sentiment?.confidence}%)
+Top Sectors      : ${JSON.stringify(quantData.sectors?.slice(0, 5))}
+Momentum Alerts  : ${JSON.stringify(quantData.momentum?.slice(0, 5))}
+Breakout Signals : ${JSON.stringify(quantData.breakouts?.slice(0, 5))}` : ''}
+
+${advancedIntelligence ? `=== ADVANCED INTELLIGENCE ===
+Momentum Prediction : ${advancedIntelligence.momentumPrediction?.probability}% probability of ${advancedIntelligence.momentumPrediction?.predictedMove} move
+Order Flow          : ${advancedIntelligence.orderFlow?.status} (Imbalance: ${advancedIntelligence.orderFlow?.imbalance}x)
+Pattern Recognition : ${advancedIntelligence.patternRecognition?.pattern} (${advancedIntelligence.patternRecognition?.status})
+Smart Money Phase   : ${advancedIntelligence.smartMoney?.phase} (Accumulation Score: ${advancedIntelligence.smartMoney?.accumulationScore})` : ''}
+
+Current Date/Time: ${new Date().toISOString()}
+
+=== OUTPUT FORMAT ===
+Respond ONLY with a single valid JSON object — no markdown fences, no prose outside the JSON.
+
+{
+  "signal": "BUY" | "SELL" | "HOLD",
+  "confidence": <integer 0-100>,
+  "signalReason": "<1-sentence decisive reason>",
+  "executiveSummary": "<2-3 sentence hedge-fund-style overview>",
+  "marketRegime": "<Trending Bull | Trending Bear | Range-Bound | Breakout | Distribution | Accumulation>",
+  "trendAnalysis": {
+    "direction": "<Uptrend | Downtrend | Sideways>",
+    "strength": "<Strong | Moderate | Weak>",
+    "ema9VsEma21": "<Bullish crossover | Bearish crossover | Aligned bullish | Aligned bearish | Neutral>",
+    "exhaustionSignals": "<describe any exhaustion or continuation signals>"
+  },
+  "keyLevels": {
+    "s2": <number>,
+    "s1": <number>,
+    "pivot": <number>,
+    "r1": <number>,
+    "r2": <number>,
+    "stopLoss": <number>,
+    "target1": <number>,
+    "target2": <number>
+  },
+  "riskReward": {
+    "entryZone": "<price range string>",
+    "stopLoss": <number>,
+    "target1": <number>,
+    "target2": <number>,
+    "rrRatio": "<e.g. 1:2.5>",
+    "maxRiskPct": <number>,
+    "kellyPositionSizePct": <number>
+  },
+  "technicalIndicators": {
+    "rsi14": ${rsi14},
+    "rsiSignal": "<Overbought | Oversold | Neutral | Bullish divergence | Bearish divergence>",
+    "atr14": ${atr14},
+    "volumeRatio": ${volRatio},
+    "volumeSignal": "<Climax buy | Climax sell | Accumulation | Distribution | Normal>",
+    "candlePattern": "<name of dominant pattern or 'None'>",
+    "macdSignal": "<Bullish | Bearish | Neutral — inferred from EMA crossover>"
+  },
+  "institutionalFlow": {
+    "phase": "<Accumulation | Distribution | Mark-up | Mark-down | Re-accumulation>",
+    "smartMoneyBias": "<Bullish | Bearish | Neutral>",
+    "fiiDiiContext": "<brief inference about FII/DII likely positioning based on price/volume behaviour>",
+    "orderFlowImbalance": "<Bid-heavy | Ask-heavy | Balanced>"
+  },
+  "sectorContext": {
+    "sectorBias": "<sector name and whether it is leading or lagging the broader market>",
+    "relativeStrength": "<Outperforming | Underperforming | In-line>",
+    "rotationSignal": "<Money flowing in | Money flowing out | Neutral>"
+  },
+  "multiTimeframeConfluence": {
+    "daily": "<brief bias>",
+    "weekly": "<brief bias>",
+    "intraday": "<brief bias>",
+    "confluenceScore": <integer 0-100>,
+    "confluenceSummary": "<1-sentence summary of alignment>"
+  },
+  "scenarios": {
+    "bull": {
+      "trigger": "<what needs to happen>",
+      "target": <number>,
+      "probability": <integer 0-100>
+    },
+    "bear": {
+      "trigger": "<what needs to happen>",
+      "target": <number>,
+      "probability": <integer 0-100>
+    }
+  },
+  "psychologicalAudit": "<2-3 sentences on retail vs institutional sentiment, fear/greed, and likely crowd behaviour>",
+  "catalystCalendar": "<any known upcoming events: earnings, results, index rebalancing, macro data — or 'No known near-term catalysts'>",
+  "actionPlan": "<3-4 sentence concrete trading plan: entry trigger, position size rationale, stop placement, exit strategy>"
+}
+`;
 
     // Retry logic for 503 errors
     let result;
@@ -2275,28 +2388,40 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
       throw new Error("Failed to get response from Gemini");
     }
 
-    const text = result.text || "";
-      
-      // Attempt to extract a confidence score from the text (e.g., "Confidence: 85%")
-      const confidenceMatch = text.match(/Confidence(?:\s+Score)?:\s*(\d+)%/i);
-      const confidence = confidenceMatch ? parseInt(confidenceMatch[1]) : 75;
+    const rawText = result.text || "";
 
-      // Attempt to extract recommendation
-      const recommendationMatch = text.match(/\*\*Strategic Recommendation\*\*:\s*(Buy|Sell|Hold)/i);
-      const recommendation = recommendationMatch ? recommendationMatch[1].toUpperCase() : "NEUTRAL";
+    // Parse structured JSON from Gemini — strip any accidental markdown fences
+    let hedgeFundData: any = null;
+    try {
+      const cleaned = rawText.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+      hedgeFundData = JSON.parse(cleaned);
+    } catch {
+      // JSON parse failed — fall back to extracting what we can from raw text
+      hedgeFundData = null;
+    }
 
-      const sources = result.candidates?.[0]?.groundingMetadata?.groundingChunks?.map((chunk: any) => ({
-        title: chunk.web?.title,
-        url: chunk.web?.uri
-      })).filter((s: any) => s.title && s.url) || [];
+    const sources = result.candidates?.[0]?.groundingMetadata?.groundingChunks?.map((chunk: any) => ({
+      title: chunk.web?.title,
+      url: chunk.web?.uri
+    })).filter((s: any) => s.title && s.url) || [];
 
-      res.json({ 
-        analysis: text,
-        sources: sources,
-        confidence: confidence,
-        recommendation: recommendation,
+    if (hedgeFundData) {
+      res.json({
+        analysis: rawText,          // kept for legacy markdown fallback
+        hedgeFund: hedgeFundData,   // structured hedge-fund payload
+        sources,
+        confidence: hedgeFundData.confidence ?? 75,
+        recommendation: (hedgeFundData.signal ?? "NEUTRAL").toUpperCase(),
         provider: "gemini"
       });
+    } else {
+      // Graceful degradation: extract basics from raw text
+      const confidenceMatch = rawText.match(/confidence["\s:]+(\d+)/i);
+      const confidence = confidenceMatch ? parseInt(confidenceMatch[1]) : 75;
+      const recMatch = rawText.match(/"signal"\s*:\s*"(BUY|SELL|HOLD)"/i);
+      const recommendation = recMatch ? recMatch[1].toUpperCase() : "NEUTRAL";
+      res.json({ analysis: rawText, sources, confidence, recommendation, provider: "gemini" });
+    }
     } catch (error: any) {
       logError("ai.analysis.failed", error, {
         symbol,

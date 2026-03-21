@@ -46,6 +46,7 @@ export interface TerminalProps {
   aiAnalysis: string | null; aiSources: any[]; aiConfidence: number;
   aiRecommendation: string | null; aiLastUpdated: string | null;
   aiLoading: boolean; aiInsights: any; advancedIntelligence: any;
+  aiHedgeFund?: any;
   runAiAnalysis: () => void; downloadCSV: () => void;
   fetchData: (s?: Stock | null, iv?: string, fromDate?: string) => void;
   loadMoreHistory: () => void;
@@ -88,6 +89,166 @@ function ChartTooltip({ active, payload }: any) {
         <span className="text-zinc-600">C</span><span className="text-right text-white font-bold">{d.close?.toFixed(2)}</span>
         <span className="text-zinc-600">V</span><span className="text-right text-indigo-400">{d.volume?.toLocaleString()}</span>
       </div>
+    </div>
+  );
+}
+
+// ─── Hedge-Fund Structured Output Panel (Terminal) ───────────────────────────
+function TerminalHedgeFundPanel({ hf, sources }: { hf: any; sources: any[] }) {
+  const kl = hf.keyLevels ?? {};
+  const rr = hf.riskReward ?? {};
+  const ti = hf.technicalIndicators ?? {};
+  const inst = hf.institutionalFlow ?? {};
+  const mtf = hf.multiTimeframeConfluence ?? {};
+  const bull = hf.scenarios?.bull ?? {};
+  const bear = hf.scenarios?.bear ?? {};
+  const trend = hf.trendAnalysis ?? {};
+  const sig = (hf.signal ?? '').toUpperCase();
+  const sigColor = sig === 'BUY' ? 'text-emerald-400' : sig === 'SELL' ? 'text-rose-400' : 'text-amber-300';
+  const sigBg   = sig === 'BUY' ? 'bg-emerald-500/10 border-emerald-500/25' : sig === 'SELL' ? 'bg-rose-500/10 border-rose-500/25' : 'bg-amber-500/10 border-amber-500/25';
+
+  const Row = ({ l, v }: { l: string; v: string | number }) => (
+    <div className="flex items-start justify-between gap-3 text-[11px]">
+      <span className="text-zinc-600 font-bold uppercase tracking-[0.12em] shrink-0">{l}</span>
+      <span className="text-zinc-200 font-bold text-right">{v}</span>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      {/* Hero */}
+      <div className={`flex flex-wrap items-center gap-4 rounded-2xl border p-4 ${sigBg}`}>
+        <span className={`rounded-full px-4 py-1.5 text-sm font-black uppercase tracking-[0.2em] border ${sigBg} ${sigColor}`}>{sig || 'HOLD'}</span>
+        <div className="flex-1 min-w-0">
+          <p className={`text-sm font-bold ${sigColor}`}>{hf.signalReason}</p>
+          <p className="mt-0.5 text-[11px] text-zinc-500">{hf.executiveSummary}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-2xl font-black text-white">{hf.confidence ?? 0}%</p>
+          <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-600">Confidence</p>
+        </div>
+      </div>
+
+      {/* Stats row */}
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+        {[
+          { l: 'Regime', v: hf.marketRegime ?? '—', c: 'text-cyan-400' },
+          { l: 'Trend', v: `${trend.direction ?? '—'} · ${trend.strength ?? '—'}`, c: 'text-white' },
+          { l: 'MTF Score', v: `${mtf.confluenceScore ?? 0}%`, c: 'text-amber-300' },
+          { l: 'RSI-14', v: ti.rsi14 ?? '—', c: Number(ti.rsi14) > 70 ? 'text-rose-400' : Number(ti.rsi14) < 30 ? 'text-emerald-400' : 'text-white' },
+        ].map(({ l, v, c }) => (
+          <div key={l} className="rounded-xl bg-white/[0.03] border border-white/[0.06] p-3">
+            <p className="text-[9px] font-bold uppercase tracking-[0.15em] text-zinc-600">{l}</p>
+            <p className={`mt-1 text-sm font-black ${c}`}>{v}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Levels + R/R */}
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <div className="rounded-xl bg-white/[0.03] border border-white/[0.06] p-4 space-y-2">
+          <p className="text-[9px] font-black uppercase tracking-[0.2em] text-zinc-500 mb-3">Key Levels</p>
+          {[
+            { l: 'S2', v: kl.s2 }, { l: 'S1', v: kl.s1 }, { l: 'Pivot', v: kl.pivot },
+            { l: 'R1', v: kl.r1 }, { l: 'R2', v: kl.r2 }, { l: 'Stop Loss', v: rr.stopLoss ?? kl.stopLoss },
+          ].map(({ l, v }) => <Row key={l} l={l} v={v != null ? `₹${Number(v).toFixed(2)}` : '—'} />)}
+        </div>
+        <div className="rounded-xl bg-white/[0.03] border border-white/[0.06] p-4 space-y-2">
+          <p className="text-[9px] font-black uppercase tracking-[0.2em] text-zinc-500 mb-3">Risk / Reward</p>
+          {[
+            { l: 'Entry Zone', v: rr.entryZone ?? '—' },
+            { l: 'Target 1', v: rr.target1 != null ? `₹${Number(rr.target1).toFixed(2)}` : '—' },
+            { l: 'Target 2', v: rr.target2 != null ? `₹${Number(rr.target2).toFixed(2)}` : '—' },
+            { l: 'R:R Ratio', v: rr.rrRatio ?? '—' },
+            { l: 'Max Risk', v: rr.maxRiskPct != null ? `${rr.maxRiskPct}%` : '—' },
+            { l: 'Kelly Size', v: rr.kellyPositionSizePct != null ? `${rr.kellyPositionSizePct}% of capital` : '—' },
+          ].map(({ l, v }) => <Row key={l} l={l} v={v} />)}
+        </div>
+      </div>
+
+      {/* Technicals + Institutional */}
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <div className="rounded-xl bg-white/[0.03] border border-white/[0.06] p-4 space-y-2">
+          <p className="text-[9px] font-black uppercase tracking-[0.2em] text-zinc-500 mb-3">Technical Indicators</p>
+          {[
+            { l: 'Volume Signal', v: ti.volumeSignal ?? '—' },
+            { l: 'Volume Ratio', v: ti.volumeRatio != null ? `${ti.volumeRatio}x` : '—' },
+            { l: 'ATR-14', v: ti.atr14 != null ? `₹${ti.atr14}` : '—' },
+            { l: 'Candle Pattern', v: ti.candlePattern ?? '—' },
+            { l: 'MACD Signal', v: ti.macdSignal ?? '—' },
+            { l: 'EMA Alignment', v: trend.ema9VsEma21 ?? '—' },
+          ].map(({ l, v }) => <Row key={l} l={l} v={v} />)}
+        </div>
+        <div className="rounded-xl bg-white/[0.03] border border-white/[0.06] p-4 space-y-2">
+          <p className="text-[9px] font-black uppercase tracking-[0.2em] text-zinc-500 mb-3">Institutional Flow</p>
+          {[
+            { l: 'Phase', v: inst.phase ?? '—' },
+            { l: 'Smart Money', v: inst.smartMoneyBias ?? '—' },
+            { l: 'Order Flow', v: inst.orderFlowImbalance ?? '—' },
+            { l: 'FII/DII', v: inst.fiiDiiContext ?? '—' },
+          ].map(({ l, v }) => <Row key={l} l={l} v={v} />)}
+        </div>
+      </div>
+
+      {/* Bull / Bear */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="rounded-xl bg-emerald-500/5 border border-emerald-500/15 p-4">
+          <div className="flex justify-between mb-2">
+            <p className="text-[9px] font-black uppercase tracking-[0.2em] text-emerald-500">Bull Case</p>
+            <span className="text-emerald-400 font-black text-sm">{bull.probability ?? 0}%</span>
+          </div>
+          <p className="text-[11px] text-zinc-500 mb-2">{bull.trigger ?? '—'}</p>
+          <p className="text-emerald-400 font-black text-sm">₹{bull.target != null ? Number(bull.target).toFixed(2) : '—'}</p>
+        </div>
+        <div className="rounded-xl bg-rose-500/5 border border-rose-500/15 p-4">
+          <div className="flex justify-between mb-2">
+            <p className="text-[9px] font-black uppercase tracking-[0.2em] text-rose-500">Bear Case</p>
+            <span className="text-rose-400 font-black text-sm">{bear.probability ?? 0}%</span>
+          </div>
+          <p className="text-[11px] text-zinc-500 mb-2">{bear.trigger ?? '—'}</p>
+          <p className="text-rose-400 font-black text-sm">₹{bear.target != null ? Number(bear.target).toFixed(2) : '—'}</p>
+        </div>
+      </div>
+
+      {/* Action plan + Psychological audit */}
+      {(hf.actionPlan || hf.psychologicalAudit) && (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          {hf.actionPlan && (
+            <div className="rounded-xl bg-white/[0.03] border border-white/[0.06] p-4">
+              <p className="text-[9px] font-black uppercase tracking-[0.2em] text-zinc-500 mb-2">Action Plan</p>
+              <p className="text-[11px] text-zinc-400 leading-5">{hf.actionPlan}</p>
+            </div>
+          )}
+          {hf.psychologicalAudit && (
+            <div className="rounded-xl bg-white/[0.03] border border-white/[0.06] p-4">
+              <p className="text-[9px] font-black uppercase tracking-[0.2em] text-zinc-500 mb-2">Psychological Audit</p>
+              <p className="text-[11px] text-zinc-400 leading-5">{hf.psychologicalAudit}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {hf.catalystCalendar && (
+        <div className="rounded-xl bg-white/[0.03] border border-white/[0.06] p-3">
+          <p className="text-[9px] font-black uppercase tracking-[0.2em] text-zinc-500 mb-1">Catalyst Calendar</p>
+          <p className="text-[11px] text-zinc-400">{hf.catalystCalendar}</p>
+        </div>
+      )}
+
+      {sources.length > 0 && (
+        <div className="rounded-xl bg-white/[0.03] border border-white/[0.06] p-4">
+          <p className="text-[9px] font-black uppercase tracking-[0.2em] text-zinc-500 mb-3">Grounding Sources</p>
+          <div className="space-y-2">
+            {sources.slice(0, 3).map((s, i) => (
+              <a key={i} href={s.url} target="_blank" rel="noreferrer"
+                className="block rounded-lg bg-black/30 border border-white/[0.05] px-3 py-2 hover:border-indigo-500/30 transition-colors">
+                <p className="text-[11px] font-bold text-zinc-300">{s.title ?? 'Source'}</p>
+                <p className="text-[9px] text-zinc-600 break-all mt-0.5">{s.url}</p>
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -688,7 +849,14 @@ export default function TerminalLayout(p: TerminalProps) {
               {p.aiLoading ? 'Analyzing...' : 'Full Audit'}
             </button>
           </div>
-          {p.aiAnalysis ? (
+          {p.aiLoading ? (
+            <div className="bg-black/20 rounded-2xl p-6 border border-white/[0.05] flex items-center gap-3">
+              <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
+              <span className="text-xs text-zinc-400">Running hedge-fund-grade analysis…</span>
+            </div>
+          ) : p.aiHedgeFund ? (
+            <TerminalHedgeFundPanel hf={p.aiHedgeFund} sources={p.aiSources} />
+          ) : p.aiAnalysis ? (
             <div className="prose prose-invert max-w-none bg-black/30 rounded-2xl p-5 border border-white/[0.05] text-sm">
               <Markdown>{p.aiAnalysis}</Markdown>
             </div>

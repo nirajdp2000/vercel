@@ -106,6 +106,7 @@ interface HistoricalResponse {
 
 interface AiAnalysisResponse {
   analysis: string;
+  hedgeFund?: any;
   sources?: Array<{ title?: string; url?: string }>;
   confidence?: number;
   recommendation?: string;
@@ -156,6 +157,7 @@ export default function App() {
   
   // AI States
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
+  const [aiHedgeFund, setAiHedgeFund] = useState<any>(null);
   const [aiSources, setAiSources] = useState<any[]>([]);
   const [aiConfidence, setAiConfidence] = useState<number>(0);
   const [aiRecommendation, setAiRecommendation] = useState<string | null>(null);
@@ -712,6 +714,7 @@ export default function App() {
       });
 
       setAiAnalysis(json.analysis);
+      setAiHedgeFund(json.hedgeFund ?? null);
       setAiSources(json.sources || []);
       setAiConfidence(json.confidence || 0);
       setAiRecommendation(json.recommendation || null);
@@ -976,6 +979,7 @@ export default function App() {
             aiRecommendation={aiRecommendation}
             aiLastUpdated={aiLastUpdated}
             aiSources={aiSources}
+            aiHedgeFund={aiHedgeFund}
           />
         ) : (
         <TerminalLayout
@@ -998,6 +1002,7 @@ export default function App() {
           aiAnalysis={aiAnalysis} aiSources={aiSources} aiConfidence={aiConfidence}
           aiRecommendation={aiRecommendation} aiLastUpdated={aiLastUpdated}
           aiLoading={aiLoading} aiInsights={aiInsights} advancedIntelligence={advancedIntelligence}
+          aiHedgeFund={aiHedgeFund}
           runAiAnalysis={runAiAnalysis} downloadCSV={downloadCSV}
           fetchData={fetchData}
           loadMoreHistory={loadMoreHistory} loadingMore={loadingMore}

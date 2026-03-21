@@ -27,6 +27,7 @@ interface InstitutionalAnalyticsProps {
   onAnalyze?: () => void;
   theme?: 'dark' | 'light';
   aiAnalysis?: string | null;
+  aiHedgeFund?: any;
   aiLoading?: boolean;
   aiConfidence?: number;
   aiRecommendation?: string | null;
@@ -43,6 +44,217 @@ const emptyVolumeProfile = {
   val: 0
 };
 
+// ─── Hedge-Fund Structured Output Panel ──────────────────────────────────────
+function SignalBadge({ signal }: { signal: string }) {
+  const s = (signal ?? '').toUpperCase();
+  const cls = s === 'BUY'
+    ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+    : s === 'SELL'
+      ? 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+      : 'bg-amber-500/15 text-amber-300 border border-amber-500/30';
+  return <span className={`rounded-full px-4 py-1.5 text-sm font-black uppercase tracking-[0.2em] ${cls}`}>{s || 'HOLD'}</span>;
+}
+
+function StatCard({ label, value, sub, color = 'text-white' }: { label: string; value: string | number; sub?: string; color?: string }) {
+  return (
+    <div className="rounded-2xl bg-white/5 border border-white/5 p-4">
+      <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/40">{label}</p>
+      <p className={`mt-2 text-xl font-black ${color}`}>{value}</p>
+      {sub && <p className="mt-1 text-[10px] text-white/30">{sub}</p>}
+    </div>
+  );
+}
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return <h4 className="text-[10px] font-black uppercase tracking-[0.25em] text-white/50 mb-3">{children}</h4>;
+}
+
+function HedgeFundPanel({ hf, sources, panelClass, subPanelClass, mutedClass, softClass, isLight }: {
+  hf: any; sources: any[]; panelClass: string; subPanelClass: string; mutedClass: string; softClass: string; isLight: boolean;
+}) {
+  const kl = hf.keyLevels ?? {};
+  const rr = hf.riskReward ?? {};
+  const ti = hf.technicalIndicators ?? {};
+  const inst = hf.institutionalFlow ?? {};
+  const sc = hf.sectorContext ?? {};
+  const mtf = hf.multiTimeframeConfluence ?? {};
+  const bull = hf.scenarios?.bull ?? {};
+  const bear = hf.scenarios?.bear ?? {};
+  const trend = hf.trendAnalysis ?? {};
+
+  const signalColor = (hf.signal ?? '').toUpperCase() === 'BUY'
+    ? 'text-emerald-400' : (hf.signal ?? '').toUpperCase() === 'SELL'
+      ? 'text-rose-400' : 'text-amber-300';
+
+  return (
+    <div className="space-y-5">
+      {/* Hero row */}
+      <div className="flex flex-wrap items-center gap-4 rounded-2xl bg-gradient-to-r from-emerald-500/10 to-cyan-500/5 border border-white/5 p-5">
+        <SignalBadge signal={hf.signal ?? 'HOLD'} />
+        <div className="flex-1 min-w-0">
+          <p className={`text-base font-bold ${signalColor}`}>{hf.signalReason}</p>
+          <p className="mt-1 text-[11px] text-white/40">{hf.executiveSummary}</p>
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          <span className="text-2xl font-black text-white">{hf.confidence ?? 0}%</span>
+          <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/40">Confidence</span>
+        </div>
+      </div>
+
+      {/* Market regime + MTF confluence */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatCard label="Market Regime" value={hf.marketRegime ?? '—'} color="text-cyan-300" />
+        <StatCard label="Trend" value={`${trend.direction ?? '—'} · ${trend.strength ?? '—'}`} color="text-white" />
+        <StatCard label="MTF Confluence" value={`${mtf.confluenceScore ?? 0}%`} sub={mtf.confluenceSummary} color="text-amber-300" />
+        <StatCard label="RSI-14" value={ti.rsi14 ?? '—'} sub={ti.rsiSignal} color={Number(ti.rsi14) > 70 ? 'text-rose-400' : Number(ti.rsi14) < 30 ? 'text-emerald-400' : 'text-white'} />
+      </div>
+
+      {/* Key levels + Risk/Reward */}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <div className={`rounded-2xl p-5 ${panelClass}`}>
+          <SectionTitle>Key Levels</SectionTitle>
+          <div className="grid grid-cols-3 gap-2 text-center">
+            {[
+              { l: 'S2', v: kl.s2, c: 'text-rose-500' },
+              { l: 'S1', v: kl.s1, c: 'text-rose-400' },
+              { l: 'Pivot', v: kl.pivot, c: 'text-white' },
+              { l: 'R1', v: kl.r1, c: 'text-emerald-400' },
+              { l: 'R2', v: kl.r2, c: 'text-emerald-500' },
+              { l: 'Stop Loss', v: rr.stopLoss ?? kl.stopLoss, c: 'text-rose-400' },
+            ].map(({ l, v, c }) => (
+              <div key={l} className={`rounded-xl p-3 ${subPanelClass}`}>
+                <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-white/40">{l}</p>
+                <p className={`mt-1 text-sm font-black ${c}`}>{v != null ? `₹${Number(v).toFixed(2)}` : '—'}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className={`rounded-2xl p-5 ${panelClass}`}>
+          <SectionTitle>Risk / Reward</SectionTitle>
+          <div className="space-y-2">
+            {[
+              { l: 'Entry Zone', v: rr.entryZone ?? '—' },
+              { l: 'Target 1', v: rr.target1 != null ? `₹${Number(rr.target1).toFixed(2)}` : '—' },
+              { l: 'Target 2', v: rr.target2 != null ? `₹${Number(rr.target2).toFixed(2)}` : '—' },
+              { l: 'R:R Ratio', v: rr.rrRatio ?? '—' },
+              { l: 'Max Risk', v: rr.maxRiskPct != null ? `${rr.maxRiskPct}%` : '—' },
+              { l: 'Kelly Size', v: rr.kellyPositionSizePct != null ? `${rr.kellyPositionSizePct}% of capital` : '—' },
+            ].map(({ l, v }) => (
+              <div key={l} className="flex items-center justify-between text-sm">
+                <span className="text-white/40 text-[11px] font-bold uppercase tracking-[0.15em]">{l}</span>
+                <span className="font-black text-white">{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Technical indicators + Institutional flow */}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <div className={`rounded-2xl p-5 ${panelClass}`}>
+          <SectionTitle>Technical Indicators</SectionTitle>
+          <div className="space-y-2">
+            {[
+              { l: 'Volume Signal', v: ti.volumeSignal ?? '—' },
+              { l: 'Volume Ratio', v: ti.volumeRatio != null ? `${ti.volumeRatio}x` : '—' },
+              { l: 'ATR-14', v: ti.atr14 != null ? `₹${ti.atr14}` : '—' },
+              { l: 'Candle Pattern', v: ti.candlePattern ?? '—' },
+              { l: 'MACD Signal', v: ti.macdSignal ?? '—' },
+              { l: 'EMA Alignment', v: trend.ema9VsEma21 ?? '—' },
+            ].map(({ l, v }) => (
+              <div key={l} className="flex items-center justify-between text-sm">
+                <span className="text-white/40 text-[11px] font-bold uppercase tracking-[0.15em]">{l}</span>
+                <span className="font-black text-white">{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className={`rounded-2xl p-5 ${panelClass}`}>
+          <SectionTitle>Institutional Flow</SectionTitle>
+          <div className="space-y-2">
+            {[
+              { l: 'Phase', v: inst.phase ?? '—' },
+              { l: 'Smart Money Bias', v: inst.smartMoneyBias ?? '—' },
+              { l: 'Order Flow', v: inst.orderFlowImbalance ?? '—' },
+              { l: 'FII/DII Context', v: inst.fiiDiiContext ?? '—' },
+              { l: 'Sector Bias', v: sc.sectorBias ?? '—' },
+              { l: 'Rotation Signal', v: sc.rotationSignal ?? '—' },
+            ].map(({ l, v }) => (
+              <div key={l} className="flex items-start justify-between gap-4 text-sm">
+                <span className="text-white/40 text-[11px] font-bold uppercase tracking-[0.15em] shrink-0">{l}</span>
+                <span className="font-bold text-white text-right text-[12px]">{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Bull / Bear scenarios */}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <div className="rounded-2xl bg-emerald-500/5 border border-emerald-500/20 p-5">
+          <div className="flex items-center justify-between mb-3">
+            <SectionTitle>Bull Case</SectionTitle>
+            <span className="text-emerald-400 font-black text-sm">{bull.probability ?? 0}%</span>
+          </div>
+          <p className="text-[11px] text-white/60 mb-2">{bull.trigger ?? '—'}</p>
+          <p className="text-emerald-400 font-black">Target ₹{bull.target != null ? Number(bull.target).toFixed(2) : '—'}</p>
+        </div>
+        <div className="rounded-2xl bg-rose-500/5 border border-rose-500/20 p-5">
+          <div className="flex items-center justify-between mb-3">
+            <SectionTitle>Bear Case</SectionTitle>
+            <span className="text-rose-400 font-black text-sm">{bear.probability ?? 0}%</span>
+          </div>
+          <p className="text-[11px] text-white/60 mb-2">{bear.trigger ?? '—'}</p>
+          <p className="text-rose-400 font-black">Target ₹{bear.target != null ? Number(bear.target).toFixed(2) : '—'}</p>
+        </div>
+      </div>
+
+      {/* Psychological audit + Action plan */}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        {hf.psychologicalAudit && (
+          <div className={`rounded-2xl p-5 ${panelClass}`}>
+            <SectionTitle>Psychological Audit</SectionTitle>
+            <p className="text-[12px] text-white/60 leading-6">{hf.psychologicalAudit}</p>
+          </div>
+        )}
+        {hf.actionPlan && (
+          <div className={`rounded-2xl p-5 ${panelClass}`}>
+            <SectionTitle>Action Plan</SectionTitle>
+            <p className="text-[12px] text-white/60 leading-6">{hf.actionPlan}</p>
+          </div>
+        )}
+      </div>
+
+      {/* Catalyst calendar */}
+      {hf.catalystCalendar && (
+        <div className={`rounded-2xl p-4 ${panelClass}`}>
+          <SectionTitle>Catalyst Calendar</SectionTitle>
+          <p className="text-[12px] text-white/60">{hf.catalystCalendar}</p>
+        </div>
+      )}
+
+      {/* Grounding sources */}
+      {sources.length > 0 && (
+        <div className={`rounded-2xl p-5 ${panelClass}`}>
+          <SectionTitle>Grounding Sources</SectionTitle>
+          <div className="space-y-2">
+            {sources.slice(0, 4).map((s, i) => (
+              <a key={i} href={s.url} target="_blank" rel="noreferrer"
+                className={`block rounded-xl px-3 py-2 text-sm transition ${subPanelClass} hover:border-cyan-400/30`}>
+                <p className="font-bold text-white/80">{s.title ?? 'Source'}</p>
+                <p className="mt-0.5 text-[10px] break-all text-white/30">{s.url}</p>
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 export const InstitutionalAnalytics: React.FC<InstitutionalAnalyticsProps> = ({
   symbol,
   instrumentKey,
@@ -50,6 +262,7 @@ export const InstitutionalAnalytics: React.FC<InstitutionalAnalyticsProps> = ({
   onAnalyze,
   theme = 'dark',
   aiAnalysis,
+  aiHedgeFund,
   aiLoading = false,
   aiConfidence = 0,
   aiRecommendation,
@@ -261,43 +474,15 @@ export const InstitutionalAnalytics: React.FC<InstitutionalAnalyticsProps> = ({
             <div className={`rounded-2xl p-5 ${panelClass}`}>
               <div className="flex items-center gap-3">
                 <Activity size={18} className="animate-spin text-emerald-400" />
-                <span className={mutedClass}>Running the scan across the latest candles and quant context.</span>
+                <span className={mutedClass}>Running hedge-fund-grade analysis across candles, technicals, and quant context…</span>
               </div>
             </div>
+          ) : aiHedgeFund ? (
+            <HedgeFundPanel hf={aiHedgeFund} sources={aiSources} panelClass={panelClass} subPanelClass={subPanelClass} mutedClass={mutedClass} softClass={softClass} isLight={isLight} />
           ) : aiAnalysis ? (
-            <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.35fr_0.65fr]">
-              <div className={`rounded-2xl p-5 ${panelClass}`}>
-                <div className={`prose max-w-none ${isLight ? 'prose-zinc' : 'prose-invert'}`}>
-                  <Markdown>{aiAnalysis}</Markdown>
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                <div className={`rounded-2xl p-5 ${panelClass}`}>
-                  <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-400">Execution Lens</h4>
-                  <p className={`mt-3 text-sm leading-6 ${mutedClass}`}>
-                    The deep scan blends recent candles, market sentiment, and institutional flow context so the desk can still produce a recommendation even when external AI is unavailable.
-                  </p>
-                </div>
-                {aiSources.length > 0 && (
-                  <div className={`rounded-2xl p-5 ${panelClass}`}>
-                    <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-cyan-300">Grounding Sources</h4>
-                    <div className="mt-3 space-y-3">
-                      {aiSources.slice(0, 4).map((source, index) => (
-                        <a
-                          key={`${source.url ?? source.title ?? index}`}
-                          href={source.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className={`block rounded-xl px-3 py-3 text-sm transition ${subPanelClass} hover:border-cyan-400/30`}
-                        >
-                          <p className="font-bold">{source.title ?? 'Source'}</p>
-                          <p className={`mt-1 text-[11px] break-all ${mutedClass}`}>{source.url}</p>
-                        </a>
-                      ))}
-                    </div>
-                  </div>
-                )}
+            <div className={`rounded-2xl p-5 ${panelClass}`}>
+              <div className={`prose max-w-none ${isLight ? 'prose-zinc' : 'prose-invert'}`}>
+                <Markdown>{aiAnalysis}</Markdown>
               </div>
             </div>
           ) : null}
