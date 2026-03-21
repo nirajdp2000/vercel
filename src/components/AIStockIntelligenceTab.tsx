@@ -898,12 +898,12 @@ function SectorStrengthPanel({ sectors }: { sectors: SectorStrength[] }) {
 
 // ─── Next-Day Predictions ─────────────────────────────────────────────────────
 
-interface PredSignals { RSI: number; MACD: number; Volume: number; Trend: number; Sentiment: number; Bollinger: number; }
+interface PredSignals { RSI: number; MACD: number; Volume: number; Trend: number; Sentiment: number; Bollinger: number; Stochastic: number; Acceleration: number; }
 interface PredStock {
   stock: string; sector: string; prediction: 'Bullish' | 'Bearish';
   confidence: number; signals: PredSignals; explanation: string;
   predicted_price: number; current_price: number;
-  indicators: { rsi: number; atr: number; volumeRatio: number; ema20: number; ema50: number; bollinger: number; sentiment: number };
+  indicators: { rsi: number; atr: number; volumeRatio: number; ema20: number; ema50: number; bollinger: number; sentiment: number; stochastic: number; acceleration: number };
 }
 interface PredData {
   bullish: PredStock[]; bearish: PredStock[];
@@ -974,7 +974,7 @@ function getRiskLevel(atr: number, currentPrice: number, confidence: number): { 
 }
 
 function getSignalAgreement(signals: PredSignals): number {
-  return Object.values(signals).filter(v => v > 0.05).length;
+  return Object.values(signals).filter(v => typeof v === 'number' && v > 0.05).length;
 }
 
 function PredCard({ p, rank, isBullish }: { p: PredStock; rank: number; isBullish: boolean }) {
@@ -1047,7 +1047,7 @@ function PredCard({ p, rank, isBullish }: { p: PredStock; rank: number; isBullis
               EMA {emaTrend === 'up' ? 'Bull' : 'Bear'}
             </span>
             <span className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[8px] font-black border bg-violet-500/10 border-violet-500/20 text-violet-400">
-              {agreement}/6 signals
+              {agreement}/8 signals
             </span>
           </div>
         </div>
@@ -1062,21 +1062,24 @@ function PredCard({ p, rank, isBullish }: { p: PredStock; rank: number; isBullis
       {/* Expanded signal breakdown */}
       {expanded && (
         <div className="space-y-1.5 pt-2 border-t border-white/5">
-          <p className="text-[8px] font-black uppercase tracking-[0.15em] text-white/25 mb-2">Signal Breakdown</p>
-          <SignalBar label="RSI" value={p.signals.RSI} color={p.signals.RSI >= 0 ? 'emerald' : 'rose'} />
-          <SignalBar label="MACD" value={p.signals.MACD} color={p.signals.MACD >= 0 ? 'emerald' : 'rose'} />
-          <SignalBar label="Volume" value={p.signals.Volume} color="amber" />
-          <SignalBar label="Trend" value={p.signals.Trend} color={p.signals.Trend >= 0 ? 'cyan' : 'rose'} />
-          <SignalBar label="Sentiment" value={p.signals.Sentiment} color={p.signals.Sentiment >= 0 ? 'violet' : 'rose'} />
-          <SignalBar label="Bollinger" value={p.signals.Bollinger} color={p.signals.Bollinger >= 0 ? 'blue' : 'rose'} />
-          <div className="grid grid-cols-4 gap-2 pt-2 text-[9px]">
+          <p className="text-[8px] font-black uppercase tracking-[0.15em] text-white/25 mb-2">Signal Breakdown (8)</p>
+          <SignalBar label="RSI"    value={p.signals.RSI}          color={p.signals.RSI >= 0 ? 'emerald' : 'rose'} />
+          <SignalBar label="MACD"   value={p.signals.MACD}         color={p.signals.MACD >= 0 ? 'emerald' : 'rose'} />
+          <SignalBar label="Trend"  value={p.signals.Trend}        color={p.signals.Trend >= 0 ? 'cyan' : 'rose'} />
+          <SignalBar label="Stoch"  value={p.signals.Stochastic ?? 0} color={(p.signals.Stochastic ?? 0) >= 0 ? 'emerald' : 'rose'} />
+          <SignalBar label="BB"     value={p.signals.Bollinger}    color={p.signals.Bollinger >= 0 ? 'blue' : 'rose'} />
+          <SignalBar label="Sent"   value={p.signals.Sentiment}    color={p.signals.Sentiment >= 0 ? 'violet' : 'rose'} />
+          <SignalBar label="Vol"    value={p.signals.Volume}       color="amber" />
+          <SignalBar label="Accel"  value={p.signals.Acceleration ?? 0} color={(p.signals.Acceleration ?? 0) >= 0 ? 'cyan' : 'rose'} />
+          <div className="grid grid-cols-4 gap-2 pt-2 text-[9px] border-t border-white/5">
             <div><span className="text-white/30">RSI </span><span className="font-bold text-white">{p.indicators.rsi.toFixed(1)}</span></div>
             <div><span className="text-white/30">Vol </span><span className="font-bold text-amber-400">{p.indicators.volumeRatio.toFixed(2)}x</span></div>
             <div><span className="text-white/30">ATR </span><span className="font-bold text-white">{p.indicators.atr.toFixed(2)}</span></div>
-            <div><span className="text-white/30">EMA20 </span><span className="font-bold text-cyan-400">{p.indicators.ema20.toFixed(1)}</span></div>
+            <div><span className="text-white/30">EMA9 </span><span className="font-bold text-cyan-400">{p.indicators.ema20.toFixed(1)}</span></div>
             <div><span className="text-white/30">EMA50 </span><span className="font-bold text-cyan-300">{p.indicators.ema50.toFixed(1)}</span></div>
             <div><span className="text-white/30">BB </span><span className={`font-bold ${(p.indicators.bollinger ?? 0) >= 0 ? 'text-blue-400' : 'text-rose-400'}`}>{((p.indicators.bollinger ?? 0) * 100).toFixed(0)}%</span></div>
             <div><span className="text-white/30">Sent </span><span className={`font-bold ${(p.indicators.sentiment ?? 0) >= 0 ? 'text-violet-400' : 'text-rose-400'}`}>{((p.indicators.sentiment ?? 0) * 100).toFixed(0)}%</span></div>
+            <div><span className="text-white/30">Stoch </span><span className={`font-bold ${(p.indicators.stochastic ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{((p.indicators.stochastic ?? 0) * 100).toFixed(0)}%</span></div>
           </div>
         </div>
       )}
@@ -1101,7 +1104,7 @@ function HistoryCard({ p }: { p: any }) {
     : { label: 'Low', color: 'text-white/40', bg: 'bg-white/5 border-white/10' };
 
   const signals = p.signals
-    ? Object.entries(p.signals).filter(([k]) => ['RSI','MACD','Volume','Trend','Sentiment','Bollinger'].includes(k))
+    ? Object.entries(p.signals).filter(([k]) => ['RSI','MACD','Volume','Trend','Sentiment','Bollinger','Stochastic','Acceleration'].includes(k))
     : [];
 
   return (
@@ -1186,6 +1189,8 @@ function HistoryCard({ p }: { p: any }) {
               Trend: isPos ? 'bg-cyan-400' : 'bg-rose-500',
               Sentiment: isPos ? 'bg-violet-400' : 'bg-rose-500',
               Bollinger: isPos ? 'bg-blue-400' : 'bg-rose-500',
+              Stochastic: isPos ? 'bg-emerald-400' : 'bg-rose-500',
+              Acceleration: isPos ? 'bg-cyan-300' : 'bg-rose-500',
             };
             const textColor: Record<string, string> = {
               RSI: isPos ? 'text-emerald-400' : 'text-rose-400',
@@ -1194,6 +1199,8 @@ function HistoryCard({ p }: { p: any }) {
               Trend: isPos ? 'text-cyan-400' : 'text-rose-400',
               Sentiment: isPos ? 'text-violet-400' : 'text-rose-400',
               Bollinger: isPos ? 'text-blue-400' : 'text-rose-400',
+              Stochastic: isPos ? 'text-emerald-400' : 'text-rose-400',
+              Acceleration: isPos ? 'text-cyan-300' : 'text-rose-400',
             };
             return (
               <div key={key} className="flex items-center gap-2 text-[9px]">
@@ -1519,7 +1526,7 @@ function NextDayPredictions() {
                             <td className="px-3 py-2.5 text-white/60 font-mono">{p.indicators.rsi.toFixed(1)}</td>
                             <td className={`px-3 py-2.5 font-bold text-[10px] ${(p.indicators.bollinger ?? 0) >= 0 ? 'text-blue-400' : 'text-rose-400'}`}>{((p.indicators.bollinger ?? 0) * 100).toFixed(0)}%</td>
                             <td className={`px-3 py-2.5 font-bold text-[10px] ${(p.indicators.sentiment ?? 0) >= 0 ? 'text-violet-400' : 'text-rose-400'}`}>{((p.indicators.sentiment ?? 0) * 100).toFixed(0)}%</td>
-                            <td className="px-3 py-2.5 text-violet-400 font-bold">{agreement}/6</td>
+                            <td className="px-3 py-2.5 text-violet-400 font-bold">{agreement}/8</td>
                           </tr>
                         );
                       })}

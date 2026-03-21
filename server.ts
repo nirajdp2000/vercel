@@ -4062,12 +4062,14 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
       stock: symbol, sector, exchange,
       prediction, confidence,
       signals: {
-        RSI:       +rsiScore.toFixed(3),
-        MACD:      +macdScore.toFixed(3),
-        Volume:    +volScore.toFixed(3),
-        Trend:     +trendScore.toFixed(3),
-        Sentiment: +sentiment.toFixed(3),
-        Bollinger: +bollinger.toFixed(3),
+        RSI:          +rsiScore.toFixed(3),
+        MACD:         +macdScore.toFixed(3),
+        Volume:       +volScore.toFixed(3),
+        Trend:        +trendScore.toFixed(3),
+        Sentiment:    +sentiment.toFixed(3),
+        Bollinger:    +bollinger.toFixed(3),
+        Stochastic:   +stochastic.toFixed(3),
+        Acceleration: +acceleration.toFixed(3),
       },
       explanation,
       predicted_price: predictedPrice,
@@ -4131,38 +4133,32 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
       };
       console.log(`[PredictionScan] Done — ${universe.length} stocks, ${bullish.length} bullish, ${bearish.length} bearish`);
 
-      // Persist predictions async — never blocks or crashes the scan
+      // Persist predictions async — atomic batch: delete all for today then insert all 40
       const today = new Date().toISOString().split('T')[0];
       const allTop = [...topBullish, ...topBearish];
       (async () => {
-        for (const r of allTop) {
-          try {
-            await PredictionStorageService.savePrediction({
-              stock_symbol: r.stock,
-              prediction_date: today,
-              target_date: today,   // use today as key so history tab shows "today's predictions"
-              prediction: r.prediction,
-              confidence: r.confidence,
-              predicted_price: r.predicted_price,
-              signals: {
-                RSI: r.signals.RSI,
-                MACD: r.signals.MACD,
-                Volume: r.signals.Volume,
-                Trend: r.signals.Trend,
-                Sentiment: r.signals.Sentiment,
-                Bollinger: r.signals.Bollinger,
-                ATR: r.indicators.atr,
-                current_price: r.current_price,
-                sector: r.sector,
-              } as any,
-              explanation: r.explanation,
-            });
-          } catch (e: any) {
-            console.error('[PredictionScan] save error:', e.message);
-          }
+        try {
+          await PredictionStorageService.saveAllPredictions(today, allTop.map(r => ({
+            stock_symbol: r.stock,
+            prediction_date: today,
+            target_date: today,
+            prediction: r.prediction,
+            confidence: r.confidence,
+            predicted_price: r.predicted_price,
+            signals: {
+              RSI: r.signals.RSI, MACD: r.signals.MACD,
+              Volume: r.signals.Volume, Trend: r.signals.Trend,
+              Sentiment: r.signals.Sentiment, Bollinger: r.signals.Bollinger,
+              Stochastic: r.signals.Stochastic, Acceleration: r.signals.Acceleration,
+              ATR: r.indicators.atr, current_price: r.current_price, sector: r.sector,
+            } as any,
+            explanation: r.explanation,
+          })));
+          console.log(`[PredictionScan] Persisted ${allTop.length} predictions for ${today}`);
+        } catch (e: any) {
+          console.error('[PredictionScan] persist error:', e.message);
         }
-        console.log(`[PredictionScan] Persisted ${allTop.length} predictions`);
-      })().catch(e => console.error('[PredictionScan] persist block error:', e.message));
+      })();
     } finally {
       predRunning = false;
     }

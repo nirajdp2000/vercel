@@ -91,6 +91,67 @@ function calcAccuracy(prediction: string, actualChange: number): number {
 
 export class PredictionStorageService {
 
+  // Atomic batch save: delete all predictions for a date then insert all at once
+  // This prevents partial saves causing inconsistent counts on refresh
+  static async saveAllPredictions(predictionDate: string, preds: StockPrediction[]): Promise<void> {
+    const now = Date.now();
+
+    // 1. Supabase
+    const sb = getSupabaseClient();
+    if (sb) {
+      try {
+        // Delete all existing for this date
+        await sb.from('predictions').delete().eq('prediction_date', predictionDate);
+        // Insert all at once
+        const rows = preds.map(pred => ({
+          stock_symbol: pred.stock_symbol,
+          prediction_date: pred.prediction_date,
+          target_date: pred.target_date,
+          prediction: pred.prediction,
+          confidence: pred.confidence,
+          predicted_price: pred.predicted_price,
+          signals: pred.signals,
+          explanation: pred.explanation,
+          created_at: now,
+        }));
+        const { error } = await sb.from('predictions').insert(rows);
+        if (!error) return;
+        console.error('[PredictionStorage] Supabase batch insert error:', error.message);
+      } catch (e: any) {
+        console.error('[PredictionStorage] Supabase batch exception:', e.message);
+      }
+    }
+
+    // 2. SQLite — wrap in transaction
+    const db = getSqliteDb();
+    if (db) {
+      const del = db.prepare('DELETE FROM predictions WHERE prediction_date = ?');
+      const ins = db.prepare(`INSERT INTO predictions (
+        stock_symbol, prediction_date, target_date, prediction, confidence,
+        predicted_price, signals, explanation, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      const tx = (db as any).transaction(() => {
+        del.run(predictionDate);
+        for (const pred of preds) {
+          ins.run(pred.stock_symbol, pred.prediction_date, pred.target_date,
+            pred.prediction, pred.confidence, pred.predicted_price,
+            JSON.stringify(pred.signals), pred.explanation, now);
+        }
+      });
+      tx();
+      return;
+    }
+
+    // 3. Memory — replace all for date
+    const keep = memoryStore.filter(p => p.prediction_date !== predictionDate);
+    memoryStore.length = 0;
+    memoryStore.push(...keep);
+    let id = memoryStore.length + 1;
+    for (const pred of preds) {
+      memoryStore.push({ ...pred, id: id++, created_at: now });
+    }
+  }
+
   static async savePrediction(pred: StockPrediction): Promise<void> {
     const now = Date.now();
 
