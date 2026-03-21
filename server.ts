@@ -1,4 +1,4 @@
-﻿import express from "express";
+import express from "express";
 import { initUniverse, getUniverse, setFallbackUniverse } from "./src/services/StockUniverseService";
 import axios from "axios";
 import dotenv from "dotenv";
@@ -1619,56 +1619,85 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] =>
 
     if (!code) {
       logAction("upstox.callback.rejected", { reason: "missing_code" });
-      return res.status(400).send(`
-        <html>
-          <body style="font-family: Arial; padding: 40px; text-align: center;">
-            <h2 style="color: #e74c3c;">âŒ Authorization Failed</h2>
-            <p>No authorization code received from Upstox.</p>
-            <a href="/" style="color: #3498db;">Return to App</a>
-          </body>
-        </html>
-      `);
+      return res.status(400).send(`<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Auth Failed</title>
+<meta http-equiv="refresh" content="3;url=/upstox/connect">
+<style>*{margin:0;padding:0;box-sizing:border-box}body{min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0a0a0b;font-family:sans-serif;color:#fff}.card{text-align:center;padding:48px 40px}h2{color:#f43f5e;margin-bottom:10px}p{color:#a1a1aa;font-size:14px}.note{margin-top:16px;font-size:11px;color:#52525b}</style>
+</head><body><div class="card"><h2>No Authorization Code</h2><p>Upstox did not return an authorization code.</p><p class="note">Redirecting back to try again...</p></div>
+<script>setTimeout(()=>location.replace('/upstox/connect'),3000)</script></body></html>`);
     }
 
     try {
       await upstoxService.handleOAuthCallback(String(code), getUpstoxCallbackUrl(req));
       logAction("upstox.callback.success", { code: "***" });
 
-      // Retrieve the stored token so we can display it for Vercel env var update
-      const storedToken = await upstoxService.tokenManager.getValidAccessToken();
-      const isVercel = !!process.env.VERCEL;
-      const tokenHint = storedToken
-        ? `<div style="margin:20px 0;padding:16px;background:#1a1a2e;border-radius:8px;text-align:left;">
-            <p style="color:#aaa;font-size:12px;margin:0 0 8px">Access Token (copy this):</p>
-            <code style="color:#27ae60;word-break:break-all;font-size:11px">${storedToken}</code>
-           </div>
-           ${isVercel ? `<div style="margin:16px 0;padding:12px;background:#fff3cd;border-radius:8px;text-align:left;color:#856404;font-size:13px;">
-             <strong>⚠️ Vercel users:</strong> This token lives in memory only. To persist across cold starts, copy the token above and set <code>UPSTOX_ACCESS_TOKEN</code> in your <code>vercel.json</code> env block, then redeploy.
-           </div>` : ''}`
-        : '';
-
-      res.send(`
-        <html>
-          <body style="font-family: Arial; padding: 40px; text-align: center; background:#0d0d1a; color:#fff;">
-            <h2 style="color: #27ae60;">✅ Authorization Successful!</h2>
-            <p>Your Upstox account has been connected successfully.</p>
-            <p>Tokens are stored securely and will auto-refresh daily.</p>
-            ${tokenHint}
-            <a href="/" style="display: inline-block; margin-top: 20px; padding: 10px 20px; background: #3498db; color: white; text-decoration: none; border-radius: 5px;">Return to App</a>
-          </body>
-        </html>
-      `);
+      // Token is already stored in SQLite — auto-redirect to app, no manual steps needed.
+      // Show a brief success screen that auto-redirects after 2 seconds.
+      res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Connected — StockPulse</title>
+  <meta http-equiv="refresh" content="2;url=/">
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{min-height:100vh;display:flex;align-items:center;justify-content:center;
+         background:#0a0a0b;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#fff}
+    .card{text-align:center;padding:48px 40px;max-width:420px}
+    .icon{font-size:56px;margin-bottom:20px;animation:pop .4s ease}
+    h2{font-size:22px;font-weight:800;color:#10b981;margin-bottom:10px}
+    p{color:#a1a1aa;font-size:14px;line-height:1.6;margin-bottom:6px}
+    .bar-wrap{margin:28px auto 0;width:200px;height:4px;background:#27272a;border-radius:4px;overflow:hidden}
+    .bar{height:100%;width:0;background:linear-gradient(90deg,#6366f1,#10b981);border-radius:4px;
+         animation:fill 2s linear forwards}
+    .note{margin-top:16px;font-size:11px;color:#52525b}
+    @keyframes pop{0%{transform:scale(.5);opacity:0}80%{transform:scale(1.15)}100%{transform:scale(1);opacity:1}}
+    @keyframes fill{to{width:100%}}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">✅</div>
+    <h2>Connected to Upstox!</h2>
+    <p>Your account is linked and tokens are saved securely.</p>
+    <p>Live market data is now active across all tabs.</p>
+    <div class="bar-wrap"><div class="bar"></div></div>
+    <p class="note">Redirecting you back to the app…</p>
+  </div>
+  <script>setTimeout(()=>location.replace('/'),2000)</script>
+</body>
+</html>`);
     } catch (error: any) {
       logError("upstox.callback.failed", error);
-      res.status(500).send(`
-        <html>
-          <body style="font-family: Arial; padding: 40px; text-align: center;">
-            <h2 style="color: #e74c3c;">âŒ Authorization Failed</h2>
-            <p>${error.message}</p>
-            <a href="/" style="color: #3498db;">Return to App</a>
-          </body>
-        </html>
-      `);
+      res.status(500).send(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Auth Failed — StockPulse</title>
+  <meta http-equiv="refresh" content="4;url=/upstox/connect">
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{min-height:100vh;display:flex;align-items:center;justify-content:center;
+         background:#0a0a0b;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#fff}
+    .card{text-align:center;padding:48px 40px;max-width:420px}
+    .icon{font-size:56px;margin-bottom:20px}
+    h2{font-size:22px;font-weight:800;color:#f43f5e;margin-bottom:10px}
+    p{color:#a1a1aa;font-size:14px;line-height:1.6;margin-bottom:6px}
+    .err{margin:16px 0;padding:12px;background:#1c1c1e;border-radius:8px;font-size:12px;color:#f87171;word-break:break-all}
+    .note{margin-top:16px;font-size:11px;color:#52525b}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon"></div>
+    <h2>Authorization Failed</h2>
+    <p>Something went wrong during the Upstox OAuth flow.</p>
+    <div class="err">${error.message}</div>
+    <p class="note">Redirecting back to try again</p>
+  </div>
+  <script>setTimeout(()=>location.replace('/upstox/connect'),4000)</script>
+</body>
+</html>`);
     }
   }));
 
