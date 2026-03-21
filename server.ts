@@ -2165,7 +2165,8 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
   }
 
   try {
-    const model = process.env.GEMINI_MODEL || "gemini-1.5-pro";
+    // Model priority: env override → gemini-2.0-flash (current free-tier default) → flash-lite fallback
+    const model = process.env.GEMINI_MODEL || "gemini-2.0-flash";
     
     // Prioritize API_KEY (injected by platform dialog) then GEMINI_API_KEY
     const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
@@ -2359,25 +2360,34 @@ Respond ONLY with a single valid JSON object — no markdown fences, no prose ou
 }
 `;
 
-    // Retry logic for 503 errors
+    // Retry logic for 503 errors; on 404 try fallback models
     let result;
     let retries = 3;
     let delay = 2000;
+    const modelFallbacks = [model, "gemini-2.0-flash-lite", "gemini-1.5-flash", "gemini-1.5-flash-8b"];
+    let modelIdx = 0;
 
     while (retries > 0) {
       try {
+        const activeModel = modelFallbacks[modelIdx] ?? model;
         result = await ai.models.generateContent({
-          model: model,
+          model: activeModel,
           contents: prompt
         });
+        logAction("ai.analysis.model.used", { symbol, model: activeModel });
         break; // Success
       } catch (err: any) {
         const is503 = err.message?.includes("503") || err.status === 503 || (err.error?.code === 503);
-        if (is503 && retries > 1) {
+        const is404 = err.message?.includes("404") || err.status === 404 || (err.error?.code === 404);
+        if (is404 && modelIdx < modelFallbacks.length - 1) {
+          console.log(`Model ${modelFallbacks[modelIdx]} not found, trying ${modelFallbacks[modelIdx + 1]}...`);
+          modelIdx++;
+          // don't decrement retries on model switch
+        } else if (is503 && retries > 1) {
           console.log(`Gemini 503 error, retrying in ${delay}ms... (${retries - 1} retries left)`);
           await new Promise(resolve => setTimeout(resolve, delay));
           retries--;
-          delay *= 2; // Exponential backoff
+          delay *= 2;
         } else {
           throw err;
         }
