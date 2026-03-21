@@ -3885,6 +3885,42 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
     return avg > 0 ? cur / avg : 1;
   }
 
+  // Bollinger Band position: returns [-1, +1] where +1 = price at upper band, -1 = at lower band
+  function predBollinger(closes: number[], period = 20): number {
+    if (closes.length < period) return 0;
+    const slice = closes.slice(-period);
+    const mean = slice.reduce((a, b) => a + b, 0) / period;
+    const std = Math.sqrt(slice.reduce((s, v) => s + (v - mean) ** 2, 0) / period);
+    if (std === 0) return 0;
+    const price = closes[closes.length - 1];
+    const upper = mean + 2 * std;
+    const lower = mean - 2 * std;
+    // Normalize: 0 = lower band, 1 = upper band → shift to [-1, +1]
+    const pos = (price - lower) / (upper - lower);
+    return Math.max(-1, Math.min(1, (pos - 0.5) * 2));
+  }
+
+  // Sentiment proxy: combines price momentum (3-day vs 10-day return) + candle body ratio
+  function predSentiment(candles: Array<{h:number;l:number;c:number;v:number}>): number {
+    if (candles.length < 10) return 0;
+    const closes = candles.map(c => c.c);
+    const price = closes[closes.length - 1];
+    const price3 = closes[closes.length - 4] ?? price;
+    const price10 = closes[closes.length - 11] ?? price;
+    // Short-term momentum vs medium-term
+    const mom3 = price3 > 0 ? (price - price3) / price3 : 0;
+    const mom10 = price10 > 0 ? (price - price10) / price10 : 0;
+    // Recent candle body ratio (bullish bodies = positive)
+    const recentBodies = candles.slice(-5).reduce((s, c) => {
+      const body = c.c - (candles[candles.indexOf(c) - 1]?.c ?? c.c);
+      return s + (body > 0 ? 1 : -1);
+    }, 0) / 5;
+    const raw = 0.4 * Math.sign(mom3) * Math.min(1, Math.abs(mom3) / 0.03)
+              + 0.4 * Math.sign(mom10) * Math.min(1, Math.abs(mom10) / 0.05)
+              + 0.2 * recentBodies;
+    return Math.max(-1, Math.min(1, raw));
+  }
+
   // ── Candle generator (deterministic per symbol, produces varied bull/bear) ──
   function makePredCandles(symbol: string, avgVol: number, count = 60) {
     // LCG pseudo-random seeded by symbol — produces genuinely varied outputs
@@ -3924,54 +3960,77 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
     const ema50 = predEMA(closes, 50);
     const volRatio = predVolRatio(vols);
     const atr = predATR(candles, 14);
+    const bollingerScore = predBollinger(closes);
+    const sentimentScore = predSentiment(candles);
     const price = closes[closes.length - 1];
 
     // Normalize to [-1, +1]
-    const rsiScore   = Math.max(-1, Math.min(1, (rsi - 50) / 30));
-    const macdScore  = price > 0 ? Math.max(-1, Math.min(1, macdHist / (price * 0.005))) : (macdHist > 0 ? 1 : -1);
-    // Volume amplifies direction of RSI+MACD rather than always being positive
-    const volAmp     = Math.min(1, Math.max(0, (volRatio - 0.5) / 2));
-    const dirSignal  = rsiScore + macdScore; // combined direction
-    const volScore   = dirSignal !== 0 ? volAmp * Math.sign(dirSignal) : 0;
-    const trendScore = ema50 > 0 ? Math.max(-1, Math.min(1, (ema20 - ema50) / (ema50 * 0.02))) : 0;
+    const rsiScore    = Math.max(-1, Math.min(1, (rsi - 50) / 30));
+    const macdScore   = price > 0 ? Math.max(-1, Math.min(1, macdHist / (price * 0.005))) : (macdHist > 0 ? 1 : -1);
+    const volAmp      = Math.min(1, Math.max(0, (volRatio - 0.5) / 2));
+    const dirSignal   = rsiScore + macdScore;
+    const volScore    = dirSignal !== 0 ? volAmp * Math.sign(dirSignal) : 0;
+    const trendScore  = ema50 > 0 ? Math.max(-1, Math.min(1, (ema20 - ema50) / (ema50 * 0.02))) : 0;
 
-    const score = 0.30 * rsiScore + 0.30 * macdScore + 0.20 * volScore + 0.20 * trendScore;
+    // Improved 6-signal weighted score
+    const score = 0.22 * rsiScore
+                + 0.22 * macdScore
+                + 0.15 * volScore
+                + 0.18 * trendScore
+                + 0.13 * bollingerScore
+                + 0.10 * sentimentScore;
 
-    if (Math.abs(score) < 0.15) return null; // Neutral — skip
+    if (Math.abs(score) < 0.12) return null; // Neutral — skip
 
     const prediction = score > 0 ? 'Bullish' : 'Bearish';
 
-    // Confidence
+    // Confidence — all 6 signals now contribute
     const volFactor = price > 0 ? Math.min(0.4, (atr / price) * 8) : 0;
     const dir = score > 0 ? 1 : -1;
-    const signals = [rsiScore, macdScore, volScore, trendScore];
-    const agreeing = signals.filter(s => s * dir > 0.05).length;
-    const agreement = 0.4 + 0.6 * (agreeing / signals.length);
-    const confidence = Math.max(52, Math.min(95, Math.round(Math.abs(score) * 160 * (1 - volFactor) * agreement)));
+    const allSignals = [rsiScore, macdScore, volScore, trendScore, bollingerScore, sentimentScore];
+    const agreeing = allSignals.filter(s => s * dir > 0.05).length;
+    const agreement = 0.35 + 0.65 * (agreeing / allSignals.length);
+    const confidence = Math.max(52, Math.min(95, Math.round(Math.abs(score) * 170 * (1 - volFactor) * agreement)));
 
     if (confidence < 55) return null;
 
-    // Explanation
+    // Rich explanation using all 6 signals
     const parts: string[] = [];
-    if (rsi > 60) parts.push(`RSI ${rsi.toFixed(0)} strong`);
-    else if (rsi < 40) parts.push(`RSI ${rsi.toFixed(0)} oversold`);
-    if (macdHist > 0) parts.push('MACD bullish'); else parts.push('MACD bearish');
-    if (volRatio > 1.5) parts.push(`${volRatio.toFixed(1)}x volume`);
-    if (trendScore > 0.3) parts.push('uptrend'); else if (trendScore < -0.3) parts.push('downtrend');
-    const explanation = `${prediction} — ${parts.slice(0, 3).join(', ') || 'mixed signals'}`;
+    if (rsi > 62) parts.push(`RSI ${rsi.toFixed(0)} overbought`);
+    else if (rsi < 38) parts.push(`RSI ${rsi.toFixed(0)} oversold`);
+    else parts.push(`RSI ${rsi.toFixed(0)}`);
+    if (macdHist > 0) parts.push('MACD bullish cross'); else parts.push('MACD bearish cross');
+    if (volRatio > 1.5) parts.push(`${volRatio.toFixed(1)}x vol surge`);
+    if (trendScore > 0.3) parts.push('EMA uptrend'); else if (trendScore < -0.3) parts.push('EMA downtrend');
+    if (bollingerScore > 0.5) parts.push('near upper BB'); else if (bollingerScore < -0.5) parts.push('near lower BB');
+    if (sentimentScore > 0.4) parts.push('bullish momentum'); else if (sentimentScore < -0.4) parts.push('bearish momentum');
+    const explanation = `${prediction} — ${parts.slice(0, 4).join(', ')}`;
 
     const atrPct = price > 0 ? atr / price : 0.01;
-    const predictedPrice = +(price * (1 + atrPct * (prediction === 'Bullish' ? 0.4 : -0.4))).toFixed(2);
+    const predictedPrice = +(price * (1 + atrPct * (prediction === 'Bullish' ? 0.5 : -0.5))).toFixed(2);
 
     return {
       stock: symbol, sector, exchange,
       prediction, confidence,
-      signals: { RSI: +rsiScore.toFixed(3), MACD: +macdScore.toFixed(3), Volume: +volScore.toFixed(3), Trend: +trendScore.toFixed(3), Sentiment: 0, Bollinger: 0 },
+      signals: {
+        RSI:       +rsiScore.toFixed(3),
+        MACD:      +macdScore.toFixed(3),
+        Volume:    +volScore.toFixed(3),
+        Trend:     +trendScore.toFixed(3),
+        Sentiment: +sentimentScore.toFixed(3),
+        Bollinger: +bollingerScore.toFixed(3),
+      },
       explanation,
       predicted_price: predictedPrice,
       current_price: +price.toFixed(2),
       raw_score: +score.toFixed(4),
-      indicators: { rsi: +rsi.toFixed(1), atr: +atr.toFixed(2), volumeRatio: +volRatio.toFixed(2), ema20: +ema20.toFixed(2), ema50: +ema50.toFixed(2) },
+      indicators: {
+        rsi: +rsi.toFixed(1), atr: +atr.toFixed(2),
+        volumeRatio: +volRatio.toFixed(2),
+        ema20: +ema20.toFixed(2), ema50: +ema50.toFixed(2),
+        bollinger: +bollingerScore.toFixed(3),
+        sentiment: +sentimentScore.toFixed(3),
+      },
     };
   }
 
@@ -4023,7 +4082,6 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
 
       // Persist predictions async — never blocks or crashes the scan
       const today = new Date().toISOString().split('T')[0];
-      const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
       const allTop = [...topBullish, ...topBearish];
       (async () => {
         for (const r of allTop) {
@@ -4031,11 +4089,21 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
             await PredictionStorageService.savePrediction({
               stock_symbol: r.stock,
               prediction_date: today,
-              target_date: tomorrow,
+              target_date: today,   // use today as key so history tab shows "today's predictions"
               prediction: r.prediction,
               confidence: r.confidence,
               predicted_price: r.predicted_price,
-              signals: { ...r.signals, ATR: r.indicators.atr },
+              signals: {
+                RSI: r.signals.RSI,
+                MACD: r.signals.MACD,
+                Volume: r.signals.Volume,
+                Trend: r.signals.Trend,
+                Sentiment: r.signals.Sentiment,
+                Bollinger: r.signals.Bollinger,
+                ATR: r.indicators.atr,
+                current_price: r.current_price,
+                sector: r.sector,
+              } as any,
               explanation: r.explanation,
             });
           } catch (e: any) {
@@ -4104,7 +4172,7 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
     }
   });
 
-  // Smart comparison: for a given date, compute predicted vs actual direction + price error
+  // Smart comparison: for a given prediction_date, compute predicted vs actual direction + price error
   app.get("/api/predictions/compare/:date", async (req, res) => {
     try {
       const preds = await PredictionStorageService.getPredictionsByDate(req.params.date);

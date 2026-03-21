@@ -136,7 +136,7 @@ export class PredictionStorageService {
     memoryStore.push({ ...pred, id: memoryStore.length + 1, created_at: now });
   }
 
-  static async getPredictionsByDate(targetDate: string): Promise<StockPrediction[]> {
+  static async getPredictionsByDate(predictionDate: string): Promise<StockPrediction[]> {
     // 1. Supabase
     const sb = getSupabaseClient();
     if (sb) {
@@ -144,7 +144,7 @@ export class PredictionStorageService {
         const { data, error } = await sb
           .from('predictions')
           .select('*')
-          .eq('target_date', targetDate)
+          .eq('prediction_date', predictionDate)
           .order('confidence', { ascending: false });
         if (!error && data) {
           return data.map((r: any) => ({
@@ -160,12 +160,12 @@ export class PredictionStorageService {
     // 2. SQLite
     const db = getSqliteDb();
     if (db) {
-      const rows = db.prepare('SELECT * FROM predictions WHERE target_date = ? ORDER BY confidence DESC').all(targetDate);
+      const rows = db.prepare('SELECT * FROM predictions WHERE prediction_date = ? ORDER BY confidence DESC').all(predictionDate);
       return rows.map((r: any) => ({ ...r, signals: JSON.parse(r.signals) }));
     }
 
     // 3. Memory
-    return memoryStore.filter(p => p.target_date === targetDate);
+    return memoryStore.filter(p => p.prediction_date === predictionDate);
   }
 
   static async updateActualPrice(id: number, actualPrice: number, actualChange: number): Promise<void> {
@@ -262,10 +262,10 @@ export class PredictionStorageService {
       try {
         const { data, error } = await sb
           .from('predictions')
-          .select('target_date')
-          .order('target_date', { ascending: false });
+          .select('prediction_date')
+          .order('prediction_date', { ascending: false });
         if (!error && data) {
-          return [...new Set(data.map((r: any) => r.target_date as string))];
+          return [...new Set(data.map((r: any) => r.prediction_date as string))];
         }
       } catch (e: any) {
         console.error('[PredictionStorage] Supabase dates error:', e.message);
@@ -275,11 +275,11 @@ export class PredictionStorageService {
     // 2. SQLite
     const db = getSqliteDb();
     if (db) {
-      const rows = db.prepare('SELECT DISTINCT target_date FROM predictions ORDER BY target_date DESC').all();
-      return rows.map((r: any) => r.target_date);
+      const rows = db.prepare('SELECT DISTINCT prediction_date FROM predictions ORDER BY prediction_date DESC').all();
+      return rows.map((r: any) => r.prediction_date);
     }
 
     // 3. Memory
-    return [...new Set(memoryStore.map(p => p.target_date))].sort().reverse();
+    return [...new Set(memoryStore.map(p => p.prediction_date))].sort().reverse();
   }
 }

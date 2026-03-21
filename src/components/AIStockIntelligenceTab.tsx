@@ -903,7 +903,7 @@ interface PredStock {
   stock: string; sector: string; prediction: 'Bullish' | 'Bearish';
   confidence: number; signals: PredSignals; explanation: string;
   predicted_price: number; current_price: number;
-  indicators: { rsi: number; atr: number; volumeRatio: number; ema20: number; ema50: number };
+  indicators: { rsi: number; atr: number; volumeRatio: number; ema20: number; ema50: number; bollinger: number; sentiment: number };
 }
 interface PredData {
   bullish: PredStock[]; bearish: PredStock[];
@@ -1069,12 +1069,14 @@ function PredCard({ p, rank, isBullish }: { p: PredStock; rank: number; isBullis
           <SignalBar label="Trend" value={p.signals.Trend} color={p.signals.Trend >= 0 ? 'cyan' : 'rose'} />
           <SignalBar label="Sentiment" value={p.signals.Sentiment} color={p.signals.Sentiment >= 0 ? 'violet' : 'rose'} />
           <SignalBar label="Bollinger" value={p.signals.Bollinger} color={p.signals.Bollinger >= 0 ? 'blue' : 'rose'} />
-          <div className="grid grid-cols-5 gap-2 pt-2 text-[9px]">
+          <div className="grid grid-cols-4 gap-2 pt-2 text-[9px]">
             <div><span className="text-white/30">RSI </span><span className="font-bold text-white">{p.indicators.rsi.toFixed(1)}</span></div>
             <div><span className="text-white/30">Vol </span><span className="font-bold text-amber-400">{p.indicators.volumeRatio.toFixed(2)}x</span></div>
             <div><span className="text-white/30">ATR </span><span className="font-bold text-white">{p.indicators.atr.toFixed(2)}</span></div>
             <div><span className="text-white/30">EMA20 </span><span className="font-bold text-cyan-400">{p.indicators.ema20.toFixed(1)}</span></div>
             <div><span className="text-white/30">EMA50 </span><span className="font-bold text-cyan-300">{p.indicators.ema50.toFixed(1)}</span></div>
+            <div><span className="text-white/30">BB </span><span className={`font-bold ${(p.indicators.bollinger ?? 0) >= 0 ? 'text-blue-400' : 'text-rose-400'}`}>{((p.indicators.bollinger ?? 0) * 100).toFixed(0)}%</span></div>
+            <div><span className="text-white/30">Sent </span><span className={`font-bold ${(p.indicators.sentiment ?? 0) >= 0 ? 'text-violet-400' : 'text-rose-400'}`}>{((p.indicators.sentiment ?? 0) * 100).toFixed(0)}%</span></div>
           </div>
         </div>
       )}
@@ -1098,7 +1100,9 @@ function HistoryCard({ p }: { p: any }) {
     : p.confidence >= 70 ? { label: 'Med', color: 'text-amber-400', bg: 'bg-amber-500/10 border-amber-500/20' }
     : { label: 'Low', color: 'text-white/40', bg: 'bg-white/5 border-white/10' };
 
-  const signals = p.signals ? Object.entries(p.signals).filter(([k]) => k !== 'ATR') : [];
+  const signals = p.signals
+    ? Object.entries(p.signals).filter(([k]) => ['RSI','MACD','Volume','Trend','Sentiment','Bollinger'].includes(k))
+    : [];
 
   return (
     <div
@@ -1175,17 +1179,42 @@ function HistoryCard({ p }: { p: any }) {
             const v = typeof val === 'number' ? val : 0;
             const pct = Math.round(Math.abs(v) * 100);
             const isPos = v >= 0;
-            const colorMap: Record<string, string> = { RSI: isPos ? 'bg-emerald-500' : 'bg-rose-500', MACD: isPos ? 'bg-emerald-500' : 'bg-rose-500', Volume: 'bg-amber-400', Trend: isPos ? 'bg-cyan-400' : 'bg-rose-500', Sentiment: isPos ? 'bg-violet-400' : 'bg-rose-500', Bollinger: isPos ? 'bg-blue-400' : 'bg-rose-500' };
+            const barColor: Record<string, string> = {
+              RSI: isPos ? 'bg-emerald-500' : 'bg-rose-500',
+              MACD: isPos ? 'bg-emerald-500' : 'bg-rose-500',
+              Volume: 'bg-amber-400',
+              Trend: isPos ? 'bg-cyan-400' : 'bg-rose-500',
+              Sentiment: isPos ? 'bg-violet-400' : 'bg-rose-500',
+              Bollinger: isPos ? 'bg-blue-400' : 'bg-rose-500',
+            };
+            const textColor: Record<string, string> = {
+              RSI: isPos ? 'text-emerald-400' : 'text-rose-400',
+              MACD: isPos ? 'text-emerald-400' : 'text-rose-400',
+              Volume: 'text-amber-400',
+              Trend: isPos ? 'text-cyan-400' : 'text-rose-400',
+              Sentiment: isPos ? 'text-violet-400' : 'text-rose-400',
+              Bollinger: isPos ? 'text-blue-400' : 'text-rose-400',
+            };
             return (
               <div key={key} className="flex items-center gap-2 text-[9px]">
-                <span className="w-14 text-white/40 uppercase tracking-[0.1em] shrink-0">{key}</span>
+                <span className="w-16 text-white/40 uppercase tracking-[0.1em] shrink-0">{key}</span>
                 <div className="flex-1 h-1 rounded-full bg-white/5 overflow-hidden">
-                  <div className={`h-full rounded-full ${colorMap[key] ?? 'bg-white/30'}`} style={{ width: `${pct}%` }} />
+                  <div className={`h-full rounded-full ${barColor[key] ?? 'bg-white/30'}`} style={{ width: `${pct}%` }} />
                 </div>
-                <span className={`w-10 text-right font-bold ${isPos ? 'text-emerald-400' : 'text-rose-400'}`}>{isPos ? '+' : ''}{v.toFixed(2)}</span>
+                <span className={`w-10 text-right font-bold ${textColor[key] ?? (isPos ? 'text-emerald-400' : 'text-rose-400')}`}>
+                  {isPos ? '+' : ''}{v.toFixed(2)}
+                </span>
               </div>
             );
           })}
+          {/* Indicator values row */}
+          {p.signals?.ATR != null && (
+            <div className="grid grid-cols-3 gap-2 pt-1.5 text-[9px] border-t border-white/5 mt-1">
+              <div><span className="text-white/30">ATR </span><span className="font-bold text-white">{p.signals.ATR?.toFixed(2)}</span></div>
+              <div><span className="text-white/30">Price </span><span className="font-bold text-white">{p.signals.current_price?.toFixed(2) ?? '—'}</span></div>
+              <div><span className="text-white/30">Sector </span><span className="font-bold text-white/60 truncate">{p.signals.sector ?? p.sector ?? '—'}</span></div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -1459,7 +1488,7 @@ function NextDayPredictions() {
                   <table className="w-full text-[11px]">
                     <thead>
                       <tr className="border-b border-white/5 bg-white/[0.03]">
-                        {['#', 'Symbol', 'Sector', 'Signal', 'Conf', 'Current', 'Target', 'Change', 'Risk', 'Vol', 'RSI', 'Signals'].map(h => (
+                        {['#', 'Symbol', 'Sector', 'Signal', 'Conf', 'Current', 'Target', 'Change', 'Risk', 'Vol', 'RSI', 'BB', 'Sent', 'Signals'].map(h => (
                           <th key={h} className="px-3 py-2.5 text-left font-black uppercase tracking-[0.1em] text-white/25 whitespace-nowrap">{h}</th>
                         ))}
                       </tr>
@@ -1488,6 +1517,8 @@ function NextDayPredictions() {
                             <td className={`px-3 py-2.5 text-[9px] font-black ${risk.color}`}>{risk.label}</td>
                             <td className={`px-3 py-2.5 font-bold ${p.indicators.volumeRatio > 1.5 ? 'text-amber-400' : 'text-white/40'}`}>{p.indicators.volumeRatio.toFixed(2)}x</td>
                             <td className="px-3 py-2.5 text-white/60 font-mono">{p.indicators.rsi.toFixed(1)}</td>
+                            <td className={`px-3 py-2.5 font-bold text-[10px] ${(p.indicators.bollinger ?? 0) >= 0 ? 'text-blue-400' : 'text-rose-400'}`}>{((p.indicators.bollinger ?? 0) * 100).toFixed(0)}%</td>
+                            <td className={`px-3 py-2.5 font-bold text-[10px] ${(p.indicators.sentiment ?? 0) >= 0 ? 'text-violet-400' : 'text-rose-400'}`}>{((p.indicators.sentiment ?? 0) * 100).toFixed(0)}%</td>
                             <td className="px-3 py-2.5 text-violet-400 font-bold">{agreement}/6</td>
                           </tr>
                         );
