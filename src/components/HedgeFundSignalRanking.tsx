@@ -129,9 +129,9 @@ export function HedgeFundSignalRanking({ dashboard }: { dashboard?: HedgeFundSig
         </div>
       </div>
 
-      <div className="mt-8 grid grid-cols-1 gap-6 xl:grid-cols-[1.6fr_0.8fr]">
-        <div className="rounded-[1.75rem] border border-white/5 bg-zinc-950/75 shadow-2xl shadow-black/20 min-w-0 overflow-hidden">
-          <div className="flex items-center justify-between border-b border-white/5 px-5 py-4">
+      <div className="mt-8 grid grid-cols-1 gap-6 xl:grid-cols-[1fr_360px] xl:items-start">
+        <div className="rounded-[1.75rem] border border-white/5 bg-zinc-950/75 shadow-2xl shadow-black/20 min-w-0 overflow-hidden flex flex-col max-h-[900px]">
+          <div className="flex items-center justify-between border-b border-white/5 px-5 py-4 shrink-0">
             <h4 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-white">
               <TrendingUp className="h-4 w-4 text-emerald-300" />
               Top 100 Stocks
@@ -139,8 +139,8 @@ export function HedgeFundSignalRanking({ dashboard }: { dashboard?: HedgeFundSig
             <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-zinc-500 hidden sm:block">Click row for detail</span>
           </div>
 
-          <div className="max-h-[34rem] overflow-auto">
-            <table className="w-full min-w-[560px] text-left text-sm">
+          <div className="overflow-x-auto overflow-y-auto">
+            <table className="w-full min-w-[520px] text-left text-sm">
               <thead className="sticky top-0 bg-zinc-950/95 text-[9px] font-bold uppercase tracking-[0.15em] text-zinc-500">
                 <tr>
                   <th className="px-3 py-3 w-10">#</th>
