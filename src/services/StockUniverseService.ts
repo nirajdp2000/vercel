@@ -1,323 +1,125 @@
 /**
- * StockUniverseService
+ * StockUniverseService — Supabase-first universe loader.
  *
- * Load priority:
- *   1. Supabase cache  — instant on Vercel cold starts (< 1s)
- *   2. Upstox CDN JSON — full 5000+ stock list, saved to Supabase after load
- *   3. Embedded fallback — ~440 curated NSE stocks, last resort
+ * Priority:
+ *   1. Supabase `stock_universe` table  (5000+ stocks)
+ *   2. Fallback list set via setFallbackUniverse() (440 embedded stocks)
  *
- * On Vercel the CDN fetch is too slow for a 30s function timeout, so Supabase
- * is the primary source. A background refresh writes fresh data to Supabase
- * once per day so the cache never goes stale.
+ * Usage:
+ *   await initUniverse()        — call once at startup (non-blocking)
+ *   getUniverseAsync()          — always resolves (waits for init if needed)
+ *   getUniverse()               — sync, returns whatever is loaded so far
+ *   setFallbackUniverse(list)   — register the embedded fallback
  */
 
-import axios from 'axios';
-import { getSupabaseClient } from '../lib/supabase';
+import { getSupabaseClient } from '../lib/supabase.js';
 
 export interface StockProfile {
-  symbol:        string;
-  name:          string;
-  exchange:      'NSE' | 'BSE';
-  sector:        string;
-  industry:      string;
-  marketCap:     number;
+  symbol: string;
+  name: string;
+  exchange: 'NSE' | 'BSE';
+  sector: string;
+  industry: string;
+  marketCap: number;
   averageVolume: number;
   instrumentKey: string;
 }
 
-const NSE_JSON_URL = 'https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz';
-const BSE_JSON_URL = 'https://assets.upstox.com/market-quote/instruments/exchange/BSE.json.gz';
-const BSE_EQUITY_TYPES = new Set(['A','B','X','XT','T','M','MT','Z','ZP','P','MS','R']);
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+// ── State ────────────────────────────────────────────────────────────────────
+let _universe: StockProfile[] = [];
+let _fallback: StockProfile[] = [];
+let _initPromise: Promise<void> | null = null;
+let _initialized = false;
 
-let cachedUniverse: StockProfile[] = [];
-let cacheTimestamp = 0;
-let loadPromise: Promise<StockProfile[]> | null = null;
-let fallbackUniverse: StockProfile[] = [];
+// ── Public API ────────────────────────────────────────────────────────────────
 
-export function setFallbackUniverse(profiles: StockProfile[]): void {
-  fallbackUniverse = profiles;
-}
-
-// ─── Sector heuristics ────────────────────────────────────────────────────────
-const SECTOR_HINTS: Array<[string, string, string]> = [
-  ['HDFCBANK','Financials','Private Bank'],['ICICIBANK','Financials','Private Bank'],
-  ['KOTAKBANK','Financials','Private Bank'],['AXISBANK','Financials','Private Bank'],
-  ['SBIN','Financials','Public Bank'],['BANKBARODA','Financials','Public Bank'],
-  ['PNB','Financials','Public Bank'],['CANBK','Financials','Public Bank'],
-  ['BAJFINANCE','Financials','NBFC'],['BAJAJFINSV','Financials','Insurance'],
-  ['SBILIFE','Financials','Insurance'],['HDFCLIFE','Financials','Insurance'],
-  ['LICI','Financials','Insurance'],['IRFC','Financials','NBFC'],['RECLTD','Financials','NBFC'],
-  ['TCS','Technology','IT Services'],['INFY','Technology','IT Services'],
-  ['WIPRO','Technology','IT Services'],['HCLTECH','Technology','IT Services'],
-  ['TECHM','Technology','IT Services'],['LTIM','Technology','IT Services'],
-  ['COFORGE','Technology','IT Services'],['PERSISTENT','Technology','IT Services'],
-  ['ZOMATO','Technology','Food Delivery'],['PAYTM','Technology','Fintech'],
-  ['RELIANCE','Energy','Oil & Gas'],['ONGC','Energy','Oil & Gas'],
-  ['BPCL','Energy','Oil Refining'],['IOC','Energy','Oil Refining'],
-  ['HINDPETRO','Energy','Oil Refining'],['COALINDIA','Energy','Mining'],
-  ['GAIL','Energy','Gas Distribution'],['IGL','Energy','Gas Distribution'],
-  ['SUNPHARMA','Healthcare','Pharma'],['CIPLA','Healthcare','Pharma'],
-  ['DRREDDY','Healthcare','Pharma'],['DIVISLAB','Healthcare','Pharma'],
-  ['LUPIN','Healthcare','Pharma'],['AUROPHARMA','Healthcare','Pharma'],
-  ['APOLLOHOSP','Healthcare','Hospitals'],['FORTIS','Healthcare','Hospitals'],
-  ['HINDUNILVR','Consumer','FMCG'],['ITC','Consumer','FMCG'],
-  ['NESTLEIND','Consumer','FMCG'],['BRITANNIA','Consumer','FMCG'],
-  ['DABUR','Consumer','FMCG'],['MARICO','Consumer','FMCG'],
-  ['GODREJCP','Consumer','FMCG'],['TATACONSUM','Consumer','FMCG'],
-  ['TITAN','Consumer','Jewellery'],['ASIANPAINT','Consumer','Paints'],
-  ['BERGEPAINT','Consumer','Paints'],['MARUTI','Auto','Passenger Vehicles'],
-  ['TATAMOTORS','Auto','Commercial Vehicles'],['HEROMOTOCO','Auto','Two Wheelers'],
-  ['BAJAJ-AUTO','Auto','Two Wheelers'],['EICHERMOT','Auto','Two Wheelers'],
-  ['JSWSTEEL','Materials','Steel'],['TATASTEEL','Materials','Steel'],
-  ['SAIL','Materials','Steel'],['HINDALCO','Materials','Aluminium'],
-  ['VEDL','Materials','Metals & Mining'],['ULTRACEMCO','Materials','Cement'],
-  ['SHREECEM','Materials','Cement'],['AMBUJACEM','Materials','Cement'],
-  ['NTPC','Utilities','Power Generation'],['POWERGRID','Utilities','Power Transmission'],
-  ['NHPC','Utilities','Hydro Power'],['ADANIGREEN','Utilities','Renewable Energy'],
-  ['ADANIENT','Industrials','Conglomerate'],['ADANIPORTS','Industrials','Ports & Logistics'],
-  ['LT','Industrials','Engineering'],['BHEL','Industrials','Engineering'],
-  ['BEL','Industrials','Defence'],['SIEMENS','Industrials','Engineering'],
-  ['HAVELLS','Industrials','Electricals'],['DLF','Real Estate','Real Estate'],
-  ['GODREJPROP','Real Estate','Real Estate'],['PRESTIGE','Real Estate','Real Estate'],
-  ['BHARTIARTL','Telecom','Telecom Services'],['INDUSTOWER','Telecom','Tower Infrastructure'],
-];
-
-function guessSector(symbol: string): [string, string] {
-  const up = symbol.toUpperCase();
-  for (const [prefix, sector, industry] of SECTOR_HINTS) {
-    if (up === prefix || up.startsWith(prefix)) return [sector, industry];
+export function setFallbackUniverse(stocks: StockProfile[]): void {
+  _fallback = stocks;
+  // If universe not yet loaded, seed it with fallback immediately
+  if (_universe.length === 0) {
+    _universe = stocks;
   }
-  if (up.includes('BANK') || up.includes('FIN')) return ['Financials','Banking'];
-  if (up.includes('PHARMA') || up.includes('CHEM') || up.includes('LAB')) return ['Healthcare','Pharma'];
-  if (up.includes('TECH') || up.includes('SOFT') || up.includes('INFO')) return ['Technology','IT Services'];
-  if (up.includes('POWER') || up.includes('ENERGY') || up.includes('SOLAR')) return ['Utilities','Power'];
-  if (up.includes('STEEL') || up.includes('METAL') || up.includes('ALLOY')) return ['Materials','Metals'];
-  if (up.includes('CEMENT') || up.includes('INFRA') || up.includes('CONST')) return ['Industrials','Infrastructure'];
-  if (up.includes('AUTO') || up.includes('MOTOR') || up.includes('WHEEL')) return ['Auto','Auto'];
-  return ['Diversified','Diversified'];
-}
-
-// ─── Supabase cache ───────────────────────────────────────────────────────────
-
-async function readFromSupabase(): Promise<{ stocks: StockProfile[]; updatedAt: number } | null> {
-  const sb = getSupabaseClient();
-  if (!sb) return null;
-  try {
-    // Read all rows in batches (Supabase default limit is 1000)
-    const all: StockProfile[] = [];
-    let latestUpdatedAt = 0;
-    let from = 0;
-    const batchSize = 1000;
-    while (true) {
-      const { data, error } = await sb
-        .from('stock_universe')
-        .select('symbol,name,exchange,sector,industry,market_cap,avg_volume,instrument_key,updated_at')
-        .range(from, from + batchSize - 1);
-      if (error || !data || data.length === 0) break;
-      for (const r of data) {
-        all.push({
-          symbol:        r.symbol,
-          name:          r.name,
-          exchange:      r.exchange as 'NSE' | 'BSE',
-          sector:        r.sector,
-          industry:      r.industry,
-          marketCap:     r.market_cap,
-          averageVolume: r.avg_volume,
-          instrumentKey: r.instrument_key,
-        });
-        if (Number(r.updated_at) > latestUpdatedAt) latestUpdatedAt = Number(r.updated_at);
-      }
-      if (data.length < batchSize) break;
-      from += batchSize;
-    }
-
-    if (all.length > 500) {
-      console.log(`[StockUniverseService] Loaded ${all.length} stocks from Supabase cache (age: ${Math.round((Date.now() - latestUpdatedAt) / 3600000)}h)`);
-      return { stocks: all, updatedAt: latestUpdatedAt };
-    }
-    return null;
-  } catch (e: any) {
-    console.warn('[StockUniverseService] Supabase read error:', e.message);
-    return null;
-  }
-}
-
-async function writeToSupabase(universe: StockProfile[]): Promise<void> {
-  const sb = getSupabaseClient();
-  if (!sb) return;
-  try {
-    const now = Date.now();
-    // Upsert in batches of 500
-    const batchSize = 500;
-    let written = 0;
-    for (let i = 0; i < universe.length; i += batchSize) {
-      const batch = universe.slice(i, i + batchSize).map(s => ({
-        symbol:         s.symbol,
-        name:           s.name,
-        exchange:       s.exchange,
-        sector:         s.sector,
-        industry:       s.industry,
-        market_cap:     s.marketCap,
-        avg_volume:     s.averageVolume,
-        instrument_key: s.instrumentKey,
-        updated_at:     now,
-      }));
-      const { error } = await sb
-        .from('stock_universe')
-        .upsert(batch, { onConflict: 'symbol,exchange' });
-      if (error) {
-        console.warn('[StockUniverseService] Supabase upsert error:', error.message);
-        return;
-      }
-      written += batch.length;
-    }
-    console.log(`[StockUniverseService] Wrote ${written} stocks to Supabase cache`);
-  } catch (e: any) {
-    console.warn('[StockUniverseService] Supabase write error:', e.message);
-  }
-}
-
-// ─── CDN fetch ────────────────────────────────────────────────────────────────
-
-interface UpstoxInstrument {
-  segment: string; instrument_type: string; instrument_key: string;
-  trading_symbol: string; name?: string; exchange: string;
-}
-
-async function decompressJson(buffer: Buffer): Promise<UpstoxInstrument[]> {
-  const zlib = await import('zlib');
-  const { promisify } = await import('util');
-  const gunzip = promisify(zlib.gunzip);
-  let jsonStr: string;
-  try { jsonStr = (await gunzip(buffer)).toString('utf8'); }
-  catch { jsonStr = buffer.toString('utf8'); }
-  return JSON.parse(jsonStr);
-}
-
-async function fetchBuffer(url: string): Promise<Buffer> {
-  const resp = await axios.get(url, { responseType: 'arraybuffer', timeout: 60000 });
-  return Buffer.from(resp.data);
-}
-
-async function fetchFromCDN(): Promise<StockProfile[]> {
-  const [nseBuffer, bseBuffer] = await Promise.all([
-    fetchBuffer(NSE_JSON_URL),
-    fetchBuffer(BSE_JSON_URL),
-  ]);
-  const [nseInstruments, bseInstruments] = await Promise.all([
-    decompressJson(nseBuffer),
-    decompressJson(bseBuffer),
-  ]);
-
-  const nseMap = new Map<string, StockProfile>();
-  const bseMap = new Map<string, StockProfile>();
-
-  for (const inst of nseInstruments) {
-    if (inst.instrument_type !== 'EQ' || inst.segment !== 'NSE_EQ') continue;
-    const symbol = inst.trading_symbol?.trim();
-    if (!symbol || symbol.length < 2) continue;
-    const [sector, industry] = guessSector(symbol);
-    const seed = Array.from(symbol).reduce((s, c) => s + c.charCodeAt(0), 0);
-    nseMap.set(symbol, {
-      symbol, name: inst.name?.trim() || symbol, exchange: 'NSE',
-      sector, industry,
-      marketCap:     500 + (seed * 137 + 53) % 200000,
-      averageVolume: 50000 + (seed * 53) % 5000000,
-      instrumentKey: inst.instrument_key,
-    });
-  }
-
-  for (const inst of bseInstruments) {
-    if (inst.segment !== 'BSE_EQ' || !BSE_EQUITY_TYPES.has(inst.instrument_type)) continue;
-    const symbol = inst.trading_symbol?.trim();
-    if (!symbol || symbol.length < 2 || /^\d/.test(symbol)) continue;
-    const [sector, industry] = guessSector(symbol);
-    const seed = Array.from(symbol).reduce((s, c) => s + c.charCodeAt(0), 0);
-    bseMap.set(symbol, {
-      symbol, name: inst.name?.trim() || symbol, exchange: 'BSE',
-      sector, industry,
-      marketCap:     500 + (seed * 137 + 53) % 200000,
-      averageVolume: 50000 + (seed * 53) % 5000000,
-      instrumentKey: inst.instrument_key,
-    });
-  }
-
-  const result: StockProfile[] = [...nseMap.values()];
-  for (const [sym, profile] of bseMap) {
-    if (!nseMap.has(sym)) result.push(profile);
-  }
-  return result;
-}
-
-// ─── Main load logic ──────────────────────────────────────────────────────────
-
-async function loadUniverse(): Promise<StockProfile[]> {
-  const start = Date.now();
-
-  // 1. Try Supabase first (fast on Vercel — no CDN fetch needed)
-  const cached = await readFromSupabase();
-  if (cached && cached.stocks.length > 500) {
-    const ageMs = Date.now() - cached.updatedAt;
-    // Background CDN refresh if cache is older than 20h
-    if (ageMs > 20 * 60 * 60 * 1000) {
-      console.log('[StockUniverseService] Background CDN refresh triggered (cache age > 20h)');
-      fetchFromCDN()
-        .then(u => writeToSupabase(u))
-        .catch(e => console.warn('[StockUniverseService] Background refresh failed:', e.message));
-    }
-    return cached.stocks;
-  }
-
-  // 2. Fetch from Upstox CDN
-  console.log('[StockUniverseService] Fetching from Upstox CDN...');
-  try {
-    const universe = await fetchFromCDN();
-    const nseCount = universe.filter(s => s.exchange === 'NSE').length;
-    const bseCount = universe.filter(s => s.exchange === 'BSE').length;
-    console.log(
-      `[StockUniverseService] CDN loaded ${universe.length} stocks ` +
-      `(NSE: ${nseCount}, BSE-only: ${bseCount}) in ${Date.now() - start}ms`
-    );
-    // Save to Supabase in background
-    writeToSupabase(universe).catch(e =>
-      console.warn('[StockUniverseService] Supabase write failed:', e.message)
-    );
-    return universe;
-  } catch (err: any) {
-    console.warn(
-      `[StockUniverseService] CDN fetch failed: ${err.message}. ` +
-      `Using fallback (${fallbackUniverse.length} stocks).`
-    );
-    return fallbackUniverse.length > 0 ? fallbackUniverse : [];
-  }
-}
-
-// ─── Public API ───────────────────────────────────────────────────────────────
-
-export async function initUniverse(): Promise<void> {
-  if (loadPromise) { await loadPromise; return; }
-  loadPromise = loadUniverse();
-  cachedUniverse = await loadPromise;
-  cacheTimestamp = Date.now();
-  loadPromise = null;
 }
 
 export function getUniverse(): StockProfile[] {
-  if (Date.now() - cacheTimestamp > CACHE_TTL_MS && !loadPromise) {
-    loadPromise = loadUniverse().then(u => {
-      cachedUniverse = u; cacheTimestamp = Date.now(); loadPromise = null; return u;
-    });
-  }
-  return cachedUniverse.length > 0 ? cachedUniverse : fallbackUniverse;
+  return _universe.length > 0 ? _universe : _fallback;
 }
 
 export async function getUniverseAsync(): Promise<StockProfile[]> {
-  if (cachedUniverse.length > 0) return cachedUniverse;
-  if (loadPromise) {
-    try { cachedUniverse = await loadPromise; } catch { /* use fallback */ }
-    return cachedUniverse.length > 0 ? cachedUniverse : fallbackUniverse;
+  if (!_initialized && _initPromise) {
+    await _initPromise;
   }
-  await initUniverse();
-  return cachedUniverse.length > 0 ? cachedUniverse : fallbackUniverse;
+  return getUniverse();
+}
+
+export async function initUniverse(): Promise<void> {
+  if (_initialized) return;
+  if (_initPromise) return _initPromise;
+
+  _initPromise = _loadUniverse();
+  await _initPromise;
+}
+
+// ── Internal ──────────────────────────────────────────────────────────────────
+
+async function _loadUniverse(): Promise<void> {
+  try {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      console.warn('[StockUniverseService] No Supabase client — using fallback');
+      _universe = _fallback;
+      _initialized = true;
+      return;
+    }
+
+    console.log('[StockUniverseService] Loading universe from Supabase...');
+
+    // Paginate — Supabase default limit is 1000 rows per request
+    const PAGE_SIZE = 1000;
+    let allRows: any[] = [];
+    let from = 0;
+    let done = false;
+
+    while (!done) {
+      const { data, error } = await supabase
+        .from('stock_universe')
+        .select('symbol,name,exchange,sector,industry,market_cap,average_volume,instrument_key')
+        .range(from, from + PAGE_SIZE - 1);
+
+      if (error) {
+        console.error('[StockUniverseService] Supabase error:', error.message);
+        break;
+      }
+
+      if (!data || data.length === 0) {
+        done = true;
+      } else {
+        allRows = allRows.concat(data);
+        from += PAGE_SIZE;
+        if (data.length < PAGE_SIZE) done = true;
+      }
+    }
+
+    if (allRows.length > 0) {
+      _universe = allRows.map(row => ({
+        symbol:        row.symbol,
+        name:          row.name || row.symbol,
+        exchange:      (row.exchange === 'BSE' ? 'BSE' : 'NSE') as 'NSE' | 'BSE',
+        sector:        row.sector || 'Unknown',
+        industry:      row.industry || 'Unknown',
+        marketCap:     Number(row.market_cap) || 1000,
+        averageVolume: Number(row.average_volume) || 100000,
+        instrumentKey: row.instrument_key || `NSE_EQ|${row.symbol}`,
+      }));
+      console.log(`[StockUniverseService] Loaded ${_universe.length} stocks from Supabase`);
+    } else {
+      console.warn('[StockUniverseService] Supabase returned 0 rows — using fallback');
+      _universe = _fallback;
+    }
+  } catch (err: any) {
+    console.error('[StockUniverseService] Load failed:', err.message);
+    _universe = _fallback;
+  } finally {
+    _initialized = true;
+  }
 }

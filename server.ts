@@ -649,8 +649,8 @@ setFallbackUniverse(NSE_STOCK_UNIVERSE.map(s => ({
   instrumentKey: `NSE_EQ|${s.symbol}`,
 })));
 
-const createUltraQuantUniverse = (): UltraQuantProfile[] =>
-  getUniverse().map(s => ({
+const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> =>
+  (await getUniverseAsync()).map(s => ({
     symbol:        s.symbol,
     sector:        s.sector,
     industry:      s.industry,
@@ -1145,9 +1145,9 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] =>
     };
   };
 
-  const buildUltraQuantDashboard = (payload: UltraQuantRequest = {}) => {
+  const buildUltraQuantDashboard = async (payload: UltraQuantRequest = {}) => {
     const request = normalizeUltraQuantRequest(payload);
-    const rawUniverse = createUltraQuantUniverse();
+    const rawUniverse = await createUltraQuantUniverse();
     const totalLoaded = rawUniverse.length;
 
     const analyzedUniverse = rawUniverse
@@ -1431,7 +1431,7 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] =>
   app.get("/api/stocks/universe", async (req, res) => {
     const universe = await getUniverseAsync();
     console.log(`[Universe] Serving ${universe.length} stocks`);
-    res.setHeader('Cache-Control', 'public, max-age=3600'); // cache 1h — universe is stable
+  res.setHeader('Cache-Control', 'no-store'); // always fresh — universe updates daily
     res.json(universe.map(s => ({
       symbol:   s.symbol,
       name:     s.name || s.symbol,
@@ -3208,12 +3208,12 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
    *   6. Sort descending, always return top 100 (no hard rejection)
    *   7. Fallback normalisation if top scores are near zero
    */
-  const buildMultibaggerScan = (cycleDays: MultibaggerCycle) => {
+  const buildMultibaggerScan = async (cycleDays: MultibaggerCycle) => {
     const cached = multibaggerCache.get(cycleDays);
     if (cached && cached.expiresAt > Date.now()) return cached.payload;
 
     const weights  = MB_CYCLE_WEIGHTS[cycleDays];
-    const universe = createUltraQuantUniverse();
+    const universe = await createUltraQuantUniverse();
 
     // Step 1: Build price/volume series for every stock
     const seriesCache = universe.map((p) => mbBuildSeries(p, cycleDays));
@@ -3324,14 +3324,14 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
   };
 
   /** GET /api/multibagger/scan?cycle=90 */
-  app.get("/api/multibagger/scan", (req, res) => {
+  app.get("/api/multibagger/scan", async (req, res) => {
     const rawCycle = parseInt(String(req.query.cycle ?? '90'), 10);
     const validCycles: MultibaggerCycle[] = [30, 60, 90, 120, 180, 300];
     const cycle: MultibaggerCycle = (validCycles.includes(rawCycle as MultibaggerCycle)
       ? rawCycle
       : 90) as MultibaggerCycle;
 
-    const result = buildMultibaggerScan(cycle);
+    const result = await buildMultibaggerScan(cycle);
     logAction("multibagger.scan.completed", {
       cycle,
       returned: result.returned,
@@ -3344,8 +3344,8 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
   // END MULTIBAGGER SCANNER ENGINE
   // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-  app.post("/api/ultra-quant/scan", (req, res) => {
-    const dashboard = buildUltraQuantDashboard(req.body || {});
+  app.post("/api/ultra-quant/scan", async (req, res) => {
+    const dashboard = await buildUltraQuantDashboard(req.body || {});
     logAction("ultra_quant.scan.completed", {
       filters: req.body || {},
       resultCount: dashboard.results.length,
@@ -3353,8 +3353,8 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
     res.json(dashboard.results);
   });
 
-  app.post("/api/ultra-quant/dashboard", (req, res) => {
-    const dashboard = buildUltraQuantDashboard(req.body || {});
+  app.post("/api/ultra-quant/dashboard", async (req, res) => {
+    const dashboard = await buildUltraQuantDashboard(req.body || {});
     logAction("ultra_quant.dashboard.completed", {
       filters: req.body || {},
       resultCount: dashboard.results.length,
@@ -3364,8 +3364,8 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
     res.json(dashboard);
   });
 
-  app.post("/api/ultra-quant/hedge-fund-ranking", (req, res) => {
-    const dashboard = buildUltraQuantDashboard(req.body || {});
+  app.post("/api/ultra-quant/hedge-fund-ranking", async (req, res) => {
+    const dashboard = await buildUltraQuantDashboard(req.body || {});
     logAction("ultra_quant.hedge_fund.completed", {
       filters: req.body || {},
       resultCount: dashboard.hedgeFundSignals.rankings.length,
@@ -3373,8 +3373,8 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
     res.json(dashboard.hedgeFundSignals);
   });
 
-  app.get("/api/ultra-quant/alerts", (req, res) => {
-    const dashboard = buildUltraQuantDashboard();
+  app.get("/api/ultra-quant/alerts", async (req, res) => {
+    const dashboard = await buildUltraQuantDashboard();
     res.json(dashboard.alerts);
   });
 
@@ -3392,12 +3392,12 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
   /** 60-second in-memory cache for the dashboard */
   let aiIntelCache: { expiresAt: number; payload: any } | null = null;
 
-  const buildAIIntelligenceDashboard = (forceRefresh = false) => {
+  const buildAIIntelligenceDashboard = async (forceRefresh = false) => {
     if (!forceRefresh && aiIntelCache && aiIntelCache.expiresAt > Date.now()) {
       return aiIntelCache.payload;
     }
 
-    const universe = createUltraQuantUniverse();
+    const universe = await createUltraQuantUniverse();
 
     // ── helpers ──────────────────────────────────────────────────────────
     const ema = (prices: number[], period: number): number[] => {
@@ -3775,7 +3775,7 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
 
   app.get("/api/ai-intelligence/dashboard", async (req, res) => {
     try {
-      const base = buildAIIntelligenceDashboard();
+      const base = await buildAIIntelligenceDashboard();
       const enriched = await enrichDashboardWithGemini(base);
       res.json(enriched);
     } catch (err: any) {
@@ -3786,7 +3786,7 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
 
   app.post("/api/ai-intelligence/refresh", async (req, res) => {
     try {
-      const base = buildAIIntelligenceDashboard(true);
+      const base = await buildAIIntelligenceDashboard(true);
       const enriched = await enrichDashboardWithGemini(base, true);
       res.json(enriched);
     } catch (err: any) {
@@ -3795,17 +3795,19 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
     }
   });
 
-  app.get("/api/ai-intelligence/alerts", (req, res) => {
+  app.get("/api/ai-intelligence/alerts", async (req, res) => {
     try {
-      res.json({ alerts: buildAIIntelligenceDashboard().liveAlerts });
+      const dash = await buildAIIntelligenceDashboard();
+      res.json({ alerts: dash.liveAlerts });
     } catch (err: any) {
       res.status(500).json({ error: "Failed to fetch alerts" });
     }
   });
 
-  app.get("/api/ai-intelligence/rally-candidates", (req, res) => {
+  app.get("/api/ai-intelligence/rally-candidates", async (req, res) => {
     try {
-      res.json(buildAIIntelligenceDashboard().earlyRallyCandidates);
+      const dash = await buildAIIntelligenceDashboard();
+      res.json(dash.earlyRallyCandidates);
     } catch (err: any) {
       res.status(500).json({ error: "Failed to fetch rally candidates" });
     }
@@ -3966,7 +3968,7 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
     if (predRunning) return;
     predRunning = true;
     try {
-      const universe = getUniverse();
+      const universe = await getUniverseAsync();
       if (universe.length === 0) { predRunning = false; return; }
 
       const bullish: any[] = [];
