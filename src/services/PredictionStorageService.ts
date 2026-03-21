@@ -19,17 +19,15 @@ export interface StockPrediction {
   prediction: 'Bullish' | 'Bearish' | 'Neutral';
   confidence: number;
   predicted_price: number;
+  current_price?: number;
+  sector?: string;
   actual_price?: number;
   actual_change?: number;
   accuracy?: number;
   signals: {
-    RSI: number;
-    MACD: number;
-    Volume: number;
-    Trend: number;
-    Sentiment: number;
-    Bollinger: number;
-    ATR: number;
+    RSI: number; MACD: number; Volume: number; Trend: number;
+    Sentiment: number; Bollinger: number; Stochastic: number; Acceleration: number;
+    ATR: number; current_price?: number; sector?: string;
   };
   explanation: string;
   created_at?: number;
@@ -110,6 +108,8 @@ export class PredictionStorageService {
           prediction: pred.prediction,
           confidence: pred.confidence,
           predicted_price: pred.predicted_price,
+          current_price: pred.signals?.current_price ?? null,
+          sector: pred.signals?.sector ?? null,
           signals: pred.signals,
           explanation: pred.explanation,
           created_at: now,

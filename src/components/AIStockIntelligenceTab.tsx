@@ -1088,140 +1088,180 @@ function PredCard({ p, rank, isBullish }: { p: PredStock; rank: number; isBullis
 }
 
 function HistoryCard({ p }: { p: any }) {
-  const [expanded, setExpanded] = useState(false);
+  const [showDetail, setShowDetail] = useState(false);
   const isBull = p.prediction === 'Bullish';
   const hasActual = p.actual_price != null;
   const correct = p.directionCorrect;
   const pending = !hasActual;
 
-  const borderCls = pending ? 'border-white/5' : correct ? 'border-emerald-500/25' : 'border-rose-500/25';
-  const bgCls = pending ? 'bg-white/[0.02]' : correct ? 'from-emerald-500/5' : 'from-rose-500/5';
-  const textColor = isBull ? 'text-emerald-400' : 'text-rose-400';
+  // Pull stored values — current_price/sector may be top-level or inside signals blob
+  const currentPrice: number = p.current_price ?? p.signals?.current_price ?? 0;
+  const sector: string = p.sector ?? p.signals?.sector ?? '—';
+  const atr: number = p.signals?.ATR ?? 0;
+  const rsiRaw: number = p.signals?.RSI ?? 0;   // normalized [-1,+1]
+  const rsiVal = Math.round(50 + rsiRaw * 28);   // back to ~0-100 for display
+  const volScore: number = p.signals?.Volume ?? 0;
+  const trendScore: number = p.signals?.Trend ?? 0;
+  const bbScore: number = p.signals?.Bollinger ?? 0;
+  const sentScore: number = p.signals?.Sentiment ?? 0;
+  const stochScore: number = p.signals?.Stochastic ?? 0;
 
   // Confidence tier
-  const confTier = p.confidence >= 80 ? { label: 'High', color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20' }
-    : p.confidence >= 70 ? { label: 'Med', color: 'text-amber-400', bg: 'bg-amber-500/10 border-amber-500/20' }
+  const confTier = p.confidence >= 80
+    ? { label: 'High', color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20' }
+    : p.confidence >= 70
+    ? { label: 'Med', color: 'text-amber-400', bg: 'bg-amber-500/10 border-amber-500/20' }
     : { label: 'Low', color: 'text-white/40', bg: 'bg-white/5 border-white/10' };
 
-  const signals = p.signals
-    ? Object.entries(p.signals).filter(([k]) => ['RSI','MACD','Volume','Trend','Sentiment','Bollinger','Stochastic','Acceleration'].includes(k))
-    : [];
+  const borderCls = pending ? 'border-white/5'
+    : correct ? 'border-emerald-500/25' : 'border-rose-500/25';
+  const bgCls = pending ? '' : correct ? 'from-emerald-500/5' : 'from-rose-500/5';
+  const textColor = isBull ? 'text-emerald-400' : 'text-rose-400';
+
+  // Price change from prediction time to target
+  const predictedChange = currentPrice > 0
+    ? (((p.predicted_price - currentPrice) / currentPrice) * 100)
+    : 0;
+
+  // Signal agreement count
+  const sigKeys = ['RSI','MACD','Volume','Trend','Sentiment','Bollinger','Stochastic','Acceleration'];
+  const dir = isBull ? 1 : -1;
+  const agreeing = sigKeys.filter(k => {
+    const v = p.signals?.[k];
+    return typeof v === 'number' && v * dir > 0.05;
+  }).length;
 
   return (
-    <div
-      onClick={() => setExpanded(e => !e)}
-      className={`rounded-2xl border ${borderCls} bg-gradient-to-br ${bgCls} to-transparent p-3 space-y-2.5 cursor-pointer transition-all hover:border-white/10`}
-    >
-      {/* Row 1: symbol + badges + result */}
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="font-black text-white">{p.stock_symbol}</span>
-          <span className={`inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[8px] font-black border ${isBull ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-rose-500/10 border-rose-500/20 text-rose-400'}`}>
-            {isBull ? <TrendingUp size={8} /> : <TrendingDown size={8} />}
-            {p.prediction}
-          </span>
-          <span className={`inline-flex rounded-md px-1.5 py-0.5 text-[8px] font-black border ${confTier.bg} ${confTier.color}`}>
-            {p.confidence}% {confTier.label}
-          </span>
+    <div className={`rounded-2xl border ${borderCls} bg-gradient-to-br ${bgCls} to-transparent p-3 space-y-2.5`}>
+
+      {/* ── Row 1: Symbol + direction + result badge ── */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-black text-white text-sm">{p.stock_symbol}</span>
+            <span className={`inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[8px] font-black border ${isBull ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-rose-500/10 border-rose-500/20 text-rose-400'}`}>
+              {isBull ? <TrendingUp size={8} /> : <TrendingDown size={8} />}
+              {p.prediction}
+            </span>
+            {sector !== '—' && (
+              <span className="rounded-md px-1.5 py-0.5 text-[8px] font-bold bg-white/5 border border-white/5 text-white/40 uppercase tracking-[0.08em]">
+                {sector}
+              </span>
+            )}
+          </div>
+          <p className="text-[9px] text-white/30">{p.prediction_date} prediction</p>
         </div>
-        {pending ? (
-          <span className="text-[8px] text-white/20 font-bold uppercase tracking-[0.1em] shrink-0">Awaiting</span>
-        ) : (
-          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[8px] font-black uppercase shrink-0 ${correct ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}`}>
-            {correct ? '✓ Correct' : '✗ Wrong'}
-          </span>
-        )}
+        <div className="text-right shrink-0 space-y-1">
+          {pending ? (
+            <span className="text-[8px] text-white/20 font-bold uppercase tracking-[0.1em]">Awaiting</span>
+          ) : (
+            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[8px] font-black uppercase ${correct ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}`}>
+              {correct ? '✓ Correct' : '✗ Wrong'}
+            </span>
+          )}
+          <div className={`text-base font-black ${confTier.color}`}>{p.confidence}%</div>
+          <div className="text-[8px] text-white/25 uppercase tracking-[0.1em]">confidence</div>
+        </div>
       </div>
 
-      {/* Confidence bar */}
+      {/* ── Confidence bar ── */}
       <div className="h-1 rounded-full bg-white/5 overflow-hidden">
         <div className={`h-full rounded-full ${isBull ? 'bg-emerald-500' : 'bg-rose-500'}`} style={{ width: `${p.confidence}%` }} />
       </div>
 
-      {/* Price row */}
-      <div className="flex items-center gap-2 text-[10px] flex-wrap">
-        <span className="text-white/40">Target: <span className={`font-bold ${textColor}`}>{p.predicted_price?.toFixed(2) ?? '—'}</span></span>
-        {hasActual ? (
-          <>
-            <span className="text-white/20">→</span>
-            <span className="text-white/40">Actual: <span className={`font-bold ${p.actual_change >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{p.actual_price?.toFixed(2)}</span></span>
-            <span className={`font-black ${p.actual_change >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-              {p.actual_change >= 0 ? '+' : ''}{p.actual_change?.toFixed(2)}%
-            </span>
-            {p.priceError != null && (
-              <span className={`ml-auto text-[9px] font-black ${p.priceError < 2 ? 'text-emerald-400' : p.priceError < 5 ? 'text-amber-400' : 'text-rose-400'}`}>
-                Δ{p.priceError.toFixed(2)}% err
-              </span>
-            )}
-          </>
-        ) : (
-          <span className="text-white/20 text-[9px]">actual price not yet recorded</span>
-        )}
+      {/* ── Price block ── */}
+      <div className="grid grid-cols-3 gap-2 rounded-xl bg-white/[0.03] border border-white/5 p-2.5">
+        <div className="text-center">
+          <p className="text-[8px] text-white/30 uppercase tracking-[0.1em] mb-0.5">Entry Price</p>
+          <p className="font-black text-white text-sm">{currentPrice > 0 ? currentPrice.toFixed(2) : '—'}</p>
+        </div>
+        <div className="text-center border-x border-white/5">
+          <p className="text-[8px] text-white/30 uppercase tracking-[0.1em] mb-0.5">Target</p>
+          <p className={`font-black text-sm ${textColor}`}>{p.predicted_price?.toFixed(2) ?? '—'}</p>
+          <p className={`text-[8px] font-bold ${textColor}`}>{isBull ? '+' : ''}{predictedChange.toFixed(2)}%</p>
+        </div>
+        <div className="text-center">
+          <p className="text-[8px] text-white/30 uppercase tracking-[0.1em] mb-0.5">Actual</p>
+          {hasActual ? (
+            <>
+              <p className={`font-black text-sm ${p.actual_change >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{p.actual_price?.toFixed(2)}</p>
+              <p className={`text-[8px] font-bold ${p.actual_change >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{p.actual_change >= 0 ? '+' : ''}{p.actual_change?.toFixed(2)}%</p>
+            </>
+          ) : (
+            <p className="text-white/20 text-[9px] mt-1">—</p>
+          )}
+        </div>
       </div>
 
-      {/* Price error bar — only when resolved */}
+      {/* ── Price error bar when resolved ── */}
       {hasActual && p.priceError != null && (
-        <div className="h-1 rounded-full bg-white/5 overflow-hidden">
-          <div
-            className={`h-full rounded-full ${p.priceError < 2 ? 'bg-emerald-500' : p.priceError < 5 ? 'bg-amber-400' : 'bg-rose-500'}`}
-            style={{ width: `${Math.min(100, p.priceError * 10)}%` }}
-          />
+        <div className="flex items-center gap-2 text-[9px]">
+          <span className="text-white/30 shrink-0">Price Δ</span>
+          <div className="flex-1 h-1.5 rounded-full bg-white/5 overflow-hidden">
+            <div className={`h-full rounded-full ${p.priceError < 2 ? 'bg-emerald-500' : p.priceError < 5 ? 'bg-amber-400' : 'bg-rose-500'}`}
+              style={{ width: `${Math.min(100, p.priceError * 10)}%` }} />
+          </div>
+          <span className={`font-black shrink-0 ${p.priceError < 2 ? 'text-emerald-400' : p.priceError < 5 ? 'text-amber-400' : 'text-rose-400'}`}>
+            {p.priceError.toFixed(2)}%
+          </span>
         </div>
       )}
 
-      {/* Explanation */}
+      {/* ── Key indicators row ── */}
+      <div className="grid grid-cols-4 gap-1.5 text-[9px]">
+        <div className="rounded-lg bg-white/[0.03] border border-white/5 p-1.5 text-center">
+          <p className="text-white/30 text-[7px] uppercase tracking-[0.08em]">RSI</p>
+          <p className={`font-black ${rsiVal > 60 ? 'text-emerald-400' : rsiVal < 40 ? 'text-rose-400' : 'text-white'}`}>{rsiVal}</p>
+        </div>
+        <div className="rounded-lg bg-white/[0.03] border border-white/5 p-1.5 text-center">
+          <p className="text-white/30 text-[7px] uppercase tracking-[0.08em]">ATR</p>
+          <p className="font-black text-white">{atr > 0 ? atr.toFixed(2) : '—'}</p>
+        </div>
+        <div className="rounded-lg bg-white/[0.03] border border-white/5 p-1.5 text-center">
+          <p className="text-white/30 text-[7px] uppercase tracking-[0.08em]">Trend</p>
+          <p className={`font-black ${trendScore > 0.2 ? 'text-emerald-400' : trendScore < -0.2 ? 'text-rose-400' : 'text-amber-400'}`}>
+            {trendScore > 0.2 ? '↑ Up' : trendScore < -0.2 ? '↓ Down' : '→ Flat'}
+          </p>
+        </div>
+        <div className="rounded-lg bg-white/[0.03] border border-white/5 p-1.5 text-center">
+          <p className="text-white/30 text-[7px] uppercase tracking-[0.08em]">Signals</p>
+          <p className={`font-black ${agreeing >= 6 ? 'text-emerald-400' : agreeing >= 4 ? 'text-amber-400' : 'text-rose-400'}`}>{agreeing}/8</p>
+        </div>
+      </div>
+
+      {/* ── Explanation ── */}
       {p.explanation && (
         <p className="text-[9px] text-white/40 leading-relaxed">{p.explanation}</p>
       )}
 
-      {/* Expanded: signal breakdown */}
-      {expanded && signals.length > 0 && (
-        <div className="space-y-1.5 pt-2 border-t border-white/5">
-          <p className="text-[8px] font-black uppercase tracking-[0.15em] text-white/25 mb-1.5">Signal Breakdown</p>
-          {signals.map(([key, val]: [string, any]) => {
-            const v = typeof val === 'number' ? val : 0;
-            const pct = Math.round(Math.abs(v) * 100);
-            const isPos = v >= 0;
-            const barColor: Record<string, string> = {
-              RSI: isPos ? 'bg-emerald-500' : 'bg-rose-500',
-              MACD: isPos ? 'bg-emerald-500' : 'bg-rose-500',
-              Volume: 'bg-amber-400',
-              Trend: isPos ? 'bg-cyan-400' : 'bg-rose-500',
-              Sentiment: isPos ? 'bg-violet-400' : 'bg-rose-500',
-              Bollinger: isPos ? 'bg-blue-400' : 'bg-rose-500',
-              Stochastic: isPos ? 'bg-emerald-400' : 'bg-rose-500',
-              Acceleration: isPos ? 'bg-cyan-300' : 'bg-rose-500',
-            };
-            const textColor: Record<string, string> = {
-              RSI: isPos ? 'text-emerald-400' : 'text-rose-400',
-              MACD: isPos ? 'text-emerald-400' : 'text-rose-400',
-              Volume: 'text-amber-400',
-              Trend: isPos ? 'text-cyan-400' : 'text-rose-400',
-              Sentiment: isPos ? 'text-violet-400' : 'text-rose-400',
-              Bollinger: isPos ? 'text-blue-400' : 'text-rose-400',
-              Stochastic: isPos ? 'text-emerald-400' : 'text-rose-400',
-              Acceleration: isPos ? 'text-cyan-300' : 'text-rose-400',
-            };
-            return (
-              <div key={key} className="flex items-center gap-2 text-[9px]">
-                <span className="w-16 text-white/40 uppercase tracking-[0.1em] shrink-0">{key}</span>
-                <div className="flex-1 h-1 rounded-full bg-white/5 overflow-hidden">
-                  <div className={`h-full rounded-full ${barColor[key] ?? 'bg-white/30'}`} style={{ width: `${pct}%` }} />
-                </div>
-                <span className={`w-10 text-right font-bold ${textColor[key] ?? (isPos ? 'text-emerald-400' : 'text-rose-400')}`}>
-                  {isPos ? '+' : ''}{v.toFixed(2)}
-                </span>
+      {/* ── Expandable detail: BB, Sentiment, Stochastic, Vol ── */}
+      <button
+        onClick={() => setShowDetail(d => !d)}
+        className="w-full text-[8px] text-white/20 hover:text-white/40 font-bold uppercase tracking-[0.12em] transition-colors text-center"
+      >
+        {showDetail ? '▲ less' : '▼ more indicators'}
+      </button>
+
+      {showDetail && (
+        <div className="grid grid-cols-2 gap-2 pt-1 border-t border-white/5">
+          {[
+            { label: 'Bollinger', value: bbScore, desc: bbScore > 0.5 ? 'Near upper band' : bbScore < -0.5 ? 'Near lower band' : 'Mid band', color: bbScore >= 0 ? 'text-blue-400' : 'text-rose-400' },
+            { label: 'Sentiment', value: sentScore, desc: sentScore > 0.4 ? 'Bullish momentum' : sentScore < -0.4 ? 'Bearish momentum' : 'Neutral', color: sentScore >= 0 ? 'text-violet-400' : 'text-rose-400' },
+            { label: 'Stochastic', value: stochScore, desc: stochScore > 0.4 ? 'Overbought zone' : stochScore < -0.4 ? 'Oversold zone' : 'Mid range', color: stochScore >= 0 ? 'text-emerald-400' : 'text-rose-400' },
+            { label: 'Volume', value: volScore, desc: volScore > 0.3 ? 'Above avg vol' : volScore < -0.3 ? 'Below avg vol' : 'Normal vol', color: 'text-amber-400' },
+          ].map(item => (
+            <div key={item.label} className="rounded-lg bg-white/[0.03] border border-white/5 p-2 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[8px] text-white/30 uppercase tracking-[0.08em] font-bold">{item.label}</span>
+                <span className={`text-[9px] font-black ${item.color}`}>{item.value >= 0 ? '+' : ''}{item.value.toFixed(2)}</span>
               </div>
-            );
-          })}
-          {/* Indicator values row */}
-          {p.signals?.ATR != null && (
-            <div className="grid grid-cols-3 gap-2 pt-1.5 text-[9px] border-t border-white/5 mt-1">
-              <div><span className="text-white/30">ATR </span><span className="font-bold text-white">{p.signals.ATR?.toFixed(2)}</span></div>
-              <div><span className="text-white/30">Price </span><span className="font-bold text-white">{p.signals.current_price?.toFixed(2) ?? '—'}</span></div>
-              <div><span className="text-white/30">Sector </span><span className="font-bold text-white/60 truncate">{p.signals.sector ?? p.sector ?? '—'}</span></div>
+              <div className="h-1 rounded-full bg-white/5 overflow-hidden">
+                <div className={`h-full rounded-full ${item.color.replace('text-', 'bg-').replace('/400', '/500').replace('/300', '/400')}`}
+                  style={{ width: `${Math.round(Math.abs(item.value) * 100)}%` }} />
+              </div>
+              <p className="text-[8px] text-white/25">{item.desc}</p>
             </div>
-          )}
+          ))}
         </div>
       )}
     </div>
