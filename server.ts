@@ -3675,25 +3675,48 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
       .sort((a, b) => b.finalScore - a.finalScore)
       .map((r, i) => ({ ...r, rank: i + 1 }));
 
-    const top50 = ranked.slice(0, 50);
+    // Percentile-based signal assignment — guarantees all 4 signals always appear
+    // Top 10% → STRONG BUY, next 30% → BUY, next 35% → HOLD, bottom 25% → SELL
+    const n = ranked.length;
+    const strongBuyCutoff = Math.floor(n * 0.10);
+    const buyCutoff       = Math.floor(n * 0.40);
+    const holdCutoff      = Math.floor(n * 0.75);
+
+    const rankedWithSignals = ranked.map((r, i) => {
+      const signal =
+        i < strongBuyCutoff ? "STRONG BUY"
+        : i < buyCutoff     ? "BUY"
+        : i < holdCutoff    ? "HOLD"
+        : "SELL";
+      const confidence =
+        i < strongBuyCutoff ? "HIGH"
+        : i < buyCutoff     ? "HIGH"
+        : i < holdCutoff    ? "MEDIUM"
+        : "LOW";
+      return { ...r, signal, confidence };
+    });
+
+    // rankings: all stocks (frontend filters by signal client-side)
+    const top50 = rankedWithSignals.slice(0, 50);
+    const allRanked = rankedWithSignals;
 
     // earlyRallyCandidates: prefer real ORB signals, fall back to top rallyScore stocks
-    const orbCandidates = ranked.filter(r => r.earlyRallySignal);
+    const orbCandidates = rankedWithSignals.filter(r => r.earlyRallySignal);
     const earlyRallyCandidates = (
       orbCandidates.length >= 5
         ? orbCandidates
-        : ranked.slice().sort((a, b) => b.rallyProbabilityScore - a.rallyProbabilityScore)
+        : rankedWithSignals.slice().sort((a, b) => b.rallyProbabilityScore - a.rallyProbabilityScore)
     )
       .sort((a, b) => b.rallyProbabilityScore - a.rallyProbabilityScore)
       .slice(0, 15);
-    const liveAlerts = ranked.slice(0, 30)
+    const liveAlerts = rankedWithSignals.slice(0, 30)
       .flatMap(r => r.alerts)
       .sort((a: any, b: any) => b.confidenceScore - a.confidenceScore)
       .slice(0, 20);
 
     // Sector strength
     const sectorMap = new Map<string, number[]>();
-    ranked.forEach(r => { if (!sectorMap.has(r.sector)) sectorMap.set(r.sector, []); sectorMap.get(r.sector)!.push(r.finalScore); });
+    rankedWithSignals.forEach(r => { if (!sectorMap.has(r.sector)) sectorMap.set(r.sector, []); sectorMap.get(r.sector)!.push(r.finalScore); });
     const sectorStrength = [...sectorMap.entries()]
       .map(([sector, scores]) => {
         const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
@@ -3702,9 +3725,9 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
       })
       .sort((a, b) => b.avgScore - a.avgScore);
 
-    const bullish = ranked.filter(r => r.finalScore > 0.65).length;
-    const highConf = ranked.filter(r => r.confidence === "HIGH").length;
-    const avgScore = ranked.reduce((s, r) => s + r.finalScore, 0) / Math.max(1, ranked.length);
+    const bullish = rankedWithSignals.filter(r => r.signal === "STRONG BUY" || r.signal === "BUY").length;
+    const highConf = rankedWithSignals.filter(r => r.confidence === "HIGH").length;
+    const avgScore = rankedWithSignals.reduce((s, r) => s + r.finalScore, 0) / Math.max(1, rankedWithSignals.length);
 
     // Build real news feed — use live RSS items when available, fall back to synthetic
     const realTopNews = newsIntel ? getTopNews(30) : [];
@@ -3744,7 +3767,7 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
         }));
 
     const payload = {
-      rankings: top50,
+      rankings: allRanked,
       earlyRallyCandidates,
       liveAlerts,
       newsFeed: realNewsFeed,
@@ -3759,12 +3782,16 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
       },
       sectorStrength,
       summary: {
-        totalScanned: ranked.length,
+        totalScanned: rankedWithSignals.length,
         bullishCount: bullish,
         earlyRallyCount: orbCandidates.length,
         highConfidenceCount: highConf,
         averageFinalScore: +avgScore.toFixed(2),
         marketBias: avgScore > 0.60 ? "BULLISH" : avgScore > 0.45 ? "NEUTRAL" : "BEARISH",
+        strongBuyCount: rankedWithSignals.filter(r => r.signal === "STRONG BUY").length,
+        buyCount:       rankedWithSignals.filter(r => r.signal === "BUY").length,
+        holdCount:      rankedWithSignals.filter(r => r.signal === "HOLD").length,
+        sellCount:      rankedWithSignals.filter(r => r.signal === "SELL").length,
       },
       computedAt: new Date().toISOString(),
     };

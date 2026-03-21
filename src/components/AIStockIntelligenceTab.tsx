@@ -230,30 +230,51 @@ function KPIBar({ summary, computedAt, aiPowered }: {
   const biasBg   = bias === 'BULLISH' ? 'bg-emerald-500/10 border-emerald-500/20' : bias === 'BEARISH' ? 'bg-rose-500/10 border-rose-500/20' : 'bg-amber-500/10 border-amber-500/20';
 
   const kpis = [
-    { label: 'Universe', value: summary.totalScanned, icon: Eye, color: 'text-white' },
-    { label: 'Bullish', value: summary.bullishCount, icon: TrendingUp, color: 'text-emerald-400' },
-    { label: 'Rally Signals', value: summary.earlyRallyCount, icon: Zap, color: 'text-amber-400' },
-    { label: 'High Conf.', value: summary.highConfidenceCount, icon: Target, color: 'text-cyan-400' },
-    { label: 'Avg Score', value: s100(Number(summary.averageFinalScore)), icon: BarChart, color: 'text-violet-400' },
+    { label: 'Universe',     value: summary.totalScanned,       icon: Eye,       color: 'text-white' },
+    { label: 'Strong Buy',   value: summary.strongBuyCount ?? 0, icon: TrendingUp, color: 'text-emerald-400' },
+    { label: 'Buy',          value: summary.buyCount ?? 0,       icon: TrendingUp, color: 'text-emerald-300' },
+    { label: 'Hold',         value: summary.holdCount ?? 0,      icon: BarChart,   color: 'text-amber-400' },
+    { label: 'Sell',         value: summary.sellCount ?? 0,      icon: TrendingDown, color: 'text-rose-400' },
+    { label: 'Rally Signals', value: summary.earlyRallyCount,   icon: Zap,        color: 'text-amber-400' },
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-      {kpis.map(k => (
-        <div key={k.label} className="flex items-center gap-3 rounded-2xl border border-white/5 bg-white/5 px-4 py-3">
-          <k.icon size={16} className={`${k.color} shrink-0 opacity-70`} />
-          <div>
-            <p className={`text-xl font-black leading-none ${k.color}`}>{k.value}</p>
-            <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/30 mt-0.5">{k.label}</p>
+    <div className="space-y-2">
+      <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+        {kpis.map(k => (
+          <div key={k.label} className="flex items-center gap-2 rounded-2xl border border-white/5 bg-white/5 px-3 py-2.5">
+            <k.icon size={14} className={`${k.color} shrink-0 opacity-70`} />
+            <div>
+              <p className={`text-lg font-black leading-none ${k.color}`}>{k.value}</p>
+              <p className="text-[8px] font-bold uppercase tracking-[0.15em] text-white/30 mt-0.5">{k.label}</p>
+            </div>
           </div>
+        ))}
+      </div>
+      <div className="flex items-center gap-3">
+        <div className={`flex items-center gap-2 rounded-xl border px-3 py-2 ${biasBg}`}>
+          <Flame size={13} className={`${biasColor} shrink-0`} />
+          <span className={`text-[11px] font-black ${biasColor}`}>{bias}</span>
+          <span className="text-[9px] text-white/30 uppercase tracking-[0.1em]">Market Bias</span>
         </div>
-      ))}
-      <div className={`flex items-center gap-3 rounded-2xl border px-4 py-3 ${biasBg}`}>
-        <Flame size={16} className={`${biasColor} shrink-0`} />
-        <div>
-          <p className={`text-xl font-black leading-none ${biasColor}`}>{bias}</p>
-          <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/30 mt-0.5">Market Bias</p>
+        <div className="flex items-center gap-2 rounded-xl border border-white/5 bg-white/5 px-3 py-2">
+          <Target size={13} className="text-cyan-400 shrink-0" />
+          <span className="text-[11px] font-black text-cyan-400">{summary.highConfidenceCount}</span>
+          <span className="text-[9px] text-white/30 uppercase tracking-[0.1em]">High Conf.</span>
         </div>
+        <div className="flex items-center gap-2 rounded-xl border border-white/5 bg-white/5 px-3 py-2">
+          <BarChart size={13} className="text-violet-400 shrink-0" />
+          <span className="text-[11px] font-black text-violet-400">{s100(Number(summary.averageFinalScore))}</span>
+          <span className="text-[9px] text-white/30 uppercase tracking-[0.1em]">Avg Score</span>
+        </div>
+        {aiPowered && (
+          <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-violet-500/10 border border-violet-500/20 px-2.5 py-1 text-[8px] font-black text-violet-400 uppercase tracking-[0.1em]">
+            <Brain size={9} /> AI Powered
+          </span>
+        )}
+        <span className="text-[9px] text-white/20 font-mono ml-auto">
+          Updated {new Date(computedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+        </span>
       </div>
     </div>
   );
@@ -269,6 +290,8 @@ function RankingsTable({ data }: { data: StockIntelligenceResult[] }) {
   const [filter, setFilter] = useState('');
   const [signalFilter, setSignalFilter] = useState('ALL');
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const PAGE = 200;
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir(d => d === 'desc' ? 'asc' : 'desc');
@@ -282,6 +305,8 @@ function RankingsTable({ data }: { data: StockIntelligenceResult[] }) {
       const av = Number(a[sortKey]), bv = Number(b[sortKey]);
       return sortDir === 'desc' ? bv - av : av - bv;
     });
+
+  const displayed = showAll ? filtered : filtered.slice(0, PAGE);
 
   const SortIcon = ({ k }: { k: SortKey }) => sortKey === k
     ? (sortDir === 'desc' ? <ChevronDown size={10} className="text-violet-400" /> : <ChevronUp size={10} className="text-violet-400" />)
@@ -311,20 +336,29 @@ function RankingsTable({ data }: { data: StockIntelligenceResult[] }) {
             className="bg-transparent text-[11px] text-white placeholder-white/20 outline-none w-36"
           />
         </div>
-        {['ALL', 'STRONG BUY', 'BUY', 'HOLD', 'SELL'].map(s => (
-          <button
-            key={s}
-            onClick={() => setSignalFilter(s)}
-            className={`rounded-lg px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.12em] transition-all ${
-              signalFilter === s
-                ? 'bg-violet-500/20 text-violet-300 border border-violet-500/30'
-                : 'text-white/30 hover:text-white/60 border border-transparent'
-            }`}
-          >
-            {s}
-          </button>
-        ))}
-        <span className="ml-auto text-[9px] text-white/20 font-mono">{filtered.length} stocks</span>
+        {['ALL', 'STRONG BUY', 'BUY', 'HOLD', 'SELL'].map(s => {
+          const count = s === 'ALL' ? data.length : data.filter(r => r.signal === s).length;
+          return (
+            <button
+              key={s}
+              onClick={() => { setSignalFilter(s); setShowAll(false); }}
+              className={`rounded-lg px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.12em] transition-all ${
+                signalFilter === s
+                  ? s === 'STRONG BUY' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                    : s === 'BUY'      ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20'
+                    : s === 'HOLD'     ? 'bg-amber-500/15 text-amber-400 border border-amber-500/20'
+                    : s === 'SELL'     ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                    : 'bg-violet-500/20 text-violet-300 border border-violet-500/30'
+                  : 'text-white/30 hover:text-white/60 border border-transparent'
+              }`}
+            >
+              {s} <span className="opacity-60">({count})</span>
+            </button>
+          );
+        })}
+        <span className="ml-auto text-[9px] text-white/20 font-mono">
+          {displayed.length < filtered.length ? `${displayed.length} of ${filtered.length}` : `${filtered.length}`} stocks
+        </span>
       </div>
 
       {/* Table */}
@@ -350,7 +384,7 @@ function RankingsTable({ data }: { data: StockIntelligenceResult[] }) {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((row) => (
+            {displayed.map((row) => (
               <React.Fragment key={row.symbol}>
                 <tr
                   onClick={() => setExpanded(expanded === row.symbol ? null : row.symbol)}
@@ -468,6 +502,18 @@ function RankingsTable({ data }: { data: StockIntelligenceResult[] }) {
                 )}
               </React.Fragment>
             ))}
+            {!showAll && filtered.length > PAGE && (
+              <tr>
+                <td colSpan={10} className="px-4 py-3 text-center">
+                  <button
+                    onClick={() => setShowAll(true)}
+                    className="rounded-lg bg-white/5 border border-white/10 px-4 py-1.5 text-[10px] font-black text-white/50 hover:text-white/80 hover:bg-white/10 transition-all uppercase tracking-[0.12em]"
+                  >
+                    Load all {filtered.length} stocks
+                  </button>
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
