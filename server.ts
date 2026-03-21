@@ -2168,8 +2168,8 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
     // Model priority: env override → gemini-2.0-flash (current free-tier default) → flash-lite fallback
     const model = process.env.GEMINI_MODEL || "gemini-2.0-flash";
     
-    // Prioritize API_KEY (injected by platform dialog) then GEMINI_API_KEY
-    const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+    // Prioritize API_KEY (injected by platform dialog) then GEMINI_API_KEY, then hardcoded fallback
+    const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || "AIzaSyCXvF9evVNikMsodzQSK1HhmIXAjyaEMfU";
     
     if (!apiKey || apiKey === "YOUR_API_KEY") {
       logAction("ai.analysis.fallback", {
@@ -3939,7 +3939,7 @@ Respond ONLY with a single valid JSON object — no markdown fences, no prose ou
   let geminiEnrichCache: { expiresAt: number; payload: any } | null = null;
 
   const enrichDashboardWithGemini = async (base: any, forceRefresh = false): Promise<any> => {
-    const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+    const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || "AIzaSyCXvF9evVNikMsodzQSK1HhmIXAjyaEMfU";
     if (!apiKey) return base;
 
     if (!forceRefresh && geminiEnrichCache && geminiEnrichCache.expiresAt > Date.now()) {
