@@ -1,48 +1,47 @@
 /**
  * UpstoxTokenManager — Token storage and auto-refresh logic
  *
- * Storage strategy (platform-agnostic):
- *   • Primary:  SQLite (local dev, Railway, Render — any platform with a writable filesystem)
- *   • Fallback: In-memory + UPSTOX_ACCESS_TOKEN env var (Vercel serverless, read-only FS)
+ * Storage priority (first available wins):
+ *   1. Supabase  — works everywhere including Vercel (set SUPABASE_URL + SUPABASE_SERVICE_KEY)
+ *   2. SQLite    — local dev / Railway / Render (writable filesystem)
+ *   3. Memory    — last resort; token lost on process restart / cold start
  *
- * better-sqlite3 is imported at the top level but wrapped in try/catch so the module
- * loads cleanly on Vercel where the native addon is unavailable.
+ * Env-var seed: UPSTOX_ACCESS_TOKEN is always checked as a final fallback
+ * so a manually-pasted token in the Vercel dashboard keeps working even
+ * without Supabase.
  */
 
 import axios from 'axios';
 import path from 'path';
 import { createRequire } from 'module';
+import { getSupabaseClient } from '../../lib/supabase.js';
 
 interface TokenRecord {
   access_token: string;
   refresh_token: string | null;
-  expires_at: number; // Unix timestamp ms
+  expires_at: number; // Unix ms
 }
 
-// ─── SQLite setup (graceful fallback if unavailable) ─────────────────────────
+// ─── SQLite (local / Railway / Render) ───────────────────────────────────────
 
 type SqliteDB = {
   exec: (sql: string) => void;
   prepare: (sql: string) => { run: (...args: any[]) => void; get: () => any };
 };
 
-let db: SqliteDB | null = null;
-let dbInitialized = false;
+let sqliteDb: SqliteDB | null = null;
+let sqliteInitialized = false;
 
-function getDb(): SqliteDB | null {
-  if (dbInitialized) return db;
-  dbInitialized = true;
-  // Skip sqlite on Vercel (read-only filesystem, no native bindings)
-  if (process.env.VERCEL) {
-    console.log('[UpstoxTokenManager] Vercel environment — using env/memory storage');
-    return null;
-  }
+function getSqliteDb(): SqliteDB | null {
+  if (sqliteInitialized) return sqliteDb;
+  sqliteInitialized = true;
+  if (process.env.VERCEL) return null; // no native bindings on Vercel
   try {
     const _require = createRequire(import.meta.url);
     const Database = _require('better-sqlite3');
     const dbPath = path.join(process.cwd(), 'upstox-tokens.db');
-    db = new Database(dbPath) as SqliteDB;
-    db.exec(`
+    sqliteDb = new Database(dbPath) as SqliteDB;
+    sqliteDb.exec(`
       CREATE TABLE IF NOT EXISTS upstox_tokens (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         access_token TEXT NOT NULL,
@@ -54,53 +53,107 @@ function getDb(): SqliteDB | null {
     `);
     console.log('[UpstoxTokenManager] SQLite storage initialised');
   } catch {
-    console.log('[UpstoxTokenManager] SQLite unavailable, using env/memory storage');
+    console.log('[UpstoxTokenManager] SQLite unavailable');
   }
-  return db;
+  return sqliteDb;
 }
 
-// ─── In-memory fallback ───────────────────────────────────────────────────────
+// ─── In-memory last resort ────────────────────────────────────────────────────
 let memoryToken: TokenRecord | null = null;
 
-function readRecord(): TokenRecord | null {
-  const db = getDb();
+// ─── Unified read / write ─────────────────────────────────────────────────────
+
+async function readRecord(): Promise<TokenRecord | null> {
+  // 1. Supabase
+  const sb = getSupabaseClient();
+  if (sb) {
+    try {
+      const { data, error } = await sb
+        .from('upstox_tokens')
+        .select('access_token, refresh_token, expires_at')
+        .order('id', { ascending: false })
+        .limit(1)
+        .single();
+      if (!error && data) {
+        return {
+          access_token: data.access_token,
+          refresh_token: data.refresh_token ?? null,
+          expires_at: Number(data.expires_at),
+        };
+      }
+    } catch (e: any) {
+      console.error('[UpstoxTokenManager] Supabase read error:', e.message);
+    }
+  }
+
+  // 2. SQLite
+  const db = getSqliteDb();
   if (db) {
     const row = db.prepare('SELECT * FROM upstox_tokens ORDER BY id DESC LIMIT 1').get() as any;
-    if (!row) return null;
-    return { access_token: row.access_token, refresh_token: row.refresh_token, expires_at: row.expires_at };
+    if (row) return { access_token: row.access_token, refresh_token: row.refresh_token, expires_at: row.expires_at };
   }
+
+  // 3. Memory
   return memoryToken;
 }
 
-function writeRecord(r: TokenRecord): void {
-  const db = getDb();
+async function writeRecord(r: TokenRecord): Promise<void> {
+  const now = Date.now();
+
+  // 1. Supabase
+  const sb = getSupabaseClient();
+  if (sb) {
+    try {
+      // Delete old rows then insert fresh (single-row table pattern)
+      await sb.from('upstox_tokens').delete().neq('id', 0);
+      const { error } = await sb.from('upstox_tokens').insert({
+        access_token: r.access_token,
+        refresh_token: r.refresh_token,
+        expires_at: r.expires_at,
+        created_at: now,
+        updated_at: now,
+      });
+      if (!error) {
+        console.log('[UpstoxTokenManager] Token written to Supabase');
+        return;
+      }
+      console.error('[UpstoxTokenManager] Supabase write error:', error.message);
+    } catch (e: any) {
+      console.error('[UpstoxTokenManager] Supabase write exception:', e.message);
+    }
+  }
+
+  // 2. SQLite
+  const db = getSqliteDb();
   if (db) {
-    const now = Date.now();
     db.prepare('DELETE FROM upstox_tokens').run();
     db.prepare(
       'INSERT INTO upstox_tokens (access_token, refresh_token, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
     ).run(r.access_token, r.refresh_token, r.expires_at, now, now);
-  } else {
-    memoryToken = r;
+    return;
   }
+
+  // 3. Memory
+  memoryToken = r;
 }
 
 // ─── Token Manager ────────────────────────────────────────────────────────────
 
 export class UpstoxTokenManager {
   constructor() {
-    // Seed from env var on startup — useful for Vercel where token is set as env var
+    // Seed from env var synchronously into memory so the first sync read works.
+    // The async writeRecord will persist it to Supabase/SQLite on next call.
     const envToken = process.env.UPSTOX_ACCESS_TOKEN;
-    if (envToken && envToken !== 'your_token_here' && envToken.length > 20 && !readRecord()) {
-      const expiresAt = Date.now() + 24 * 60 * 60 * 1000; // assume 24h
-      writeRecord({ access_token: envToken, refresh_token: null, expires_at: expiresAt });
-      console.log('[UpstoxTokenManager] Seeded token from UPSTOX_ACCESS_TOKEN env var');
+    if (envToken && envToken !== 'your_token_here' && envToken.length > 20 && !memoryToken) {
+      const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
+      memoryToken = { access_token: envToken, refresh_token: null, expires_at: expiresAt };
+      console.log('[UpstoxTokenManager] Seeded memory token from UPSTOX_ACCESS_TOKEN env var');
     }
   }
 
-  storeTokens(accessToken: string, refreshToken: string | null, expiresIn: number): void {
+  async storeTokens(accessToken: string, refreshToken: string | null, expiresIn: number): Promise<void> {
     const expiresAt = Date.now() + expiresIn * 1000;
-    writeRecord({ access_token: accessToken, refresh_token: refreshToken, expires_at: expiresAt });
+    await writeRecord({ access_token: accessToken, refresh_token: refreshToken, expires_at: expiresAt });
     console.log(`[UpstoxTokenManager] Tokens stored | expires=${new Date(expiresAt).toISOString()} | len=${accessToken.length}`);
   }
 
@@ -127,44 +180,42 @@ export class UpstoxTokenManager {
 
     const { access_token, refresh_token: newRefresh, expires_in } = data;
     if (!access_token) throw new Error('No access_token in refresh response');
-    this.storeTokens(access_token, newRefresh || refreshToken, expires_in || 86400);
+    await this.storeTokens(access_token, newRefresh || refreshToken, expires_in || 86400);
     console.log('[UpstoxTokenManager] Token refreshed successfully');
   }
 
   async getValidAccessToken(): Promise<string | null> {
-    const record = readRecord();
+    const record = await readRecord();
 
-    // ── No record at all ──────────────────────────────────────────────────────
+    // ── No record ─────────────────────────────────────────────────────────────
     if (!record) {
-      // Last-resort: env var (Vercel cold-start after OAuth, or manual token set)
       const envToken = process.env.UPSTOX_ACCESS_TOKEN;
       if (envToken && envToken !== 'your_token_here' && envToken.length > 20) {
-        console.log('[UpstoxTokenManager] No DB record — seeding from UPSTOX_ACCESS_TOKEN env var');
+        console.log('[UpstoxTokenManager] No record — seeding from UPSTOX_ACCESS_TOKEN env var');
         const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
-        writeRecord({ access_token: envToken, refresh_token: null, expires_at: expiresAt });
+        await writeRecord({ access_token: envToken, refresh_token: null, expires_at: expiresAt });
         return envToken;
       }
       console.log('[UpstoxTokenManager] No tokens found');
       return null;
     }
 
-    // ── Token expired ─────────────────────────────────────────────────────────
+    // ── Expired ───────────────────────────────────────────────────────────────
     if (this.isExpired(record.expires_at)) {
-      // Try refresh token first
       if (record.refresh_token) {
         try {
           await this.refreshAccessToken(record.refresh_token);
-          return readRecord()?.access_token || null;
+          return (await readRecord())?.access_token || null;
         } catch (e) {
           console.error('[UpstoxTokenManager] Auto-refresh failed:', e);
         }
       }
-      // Fall back to env var (Vercel: token set manually in dashboard)
+      // Env var fallback
       const envToken = process.env.UPSTOX_ACCESS_TOKEN;
       if (envToken && envToken !== 'your_token_here' && envToken.length > 20) {
-        console.log('[UpstoxTokenManager] Expired token — falling back to UPSTOX_ACCESS_TOKEN env var');
+        console.log('[UpstoxTokenManager] Expired — falling back to UPSTOX_ACCESS_TOKEN env var');
         const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
-        writeRecord({ access_token: envToken, refresh_token: null, expires_at: expiresAt });
+        await writeRecord({ access_token: envToken, refresh_token: null, expires_at: expiresAt });
         return envToken;
       }
       console.error('[UpstoxTokenManager] Token expired, no refresh token, no env fallback');
@@ -172,7 +223,7 @@ export class UpstoxTokenManager {
     }
 
     const minsLeft = Math.round((record.expires_at - Date.now()) / 60000);
-    console.log(`[UpstoxTokenManager] Using valid access token (expires in ${minsLeft}m, length=${record.access_token.length})`);
+    console.log(`[UpstoxTokenManager] Valid token (expires in ${minsLeft}m, len=${record.access_token.length})`);
     return record.access_token;
   }
 
@@ -195,11 +246,9 @@ export class UpstoxTokenManager {
 
     const { access_token, refresh_token, expires_in } = data;
     if (!access_token) throw new Error('No access_token in response');
-    this.storeTokens(access_token, refresh_token || null, expires_in || 86400);
+    await this.storeTokens(access_token, refresh_token || null, expires_in || 86400);
     console.log('[UpstoxTokenManager] Authorization code exchanged successfully');
   }
 
-  close(): void {
-    // no-op — connection managed at module level
-  }
+  close(): void { /* no-op */ }
 }

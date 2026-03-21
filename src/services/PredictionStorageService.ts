@@ -1,18 +1,21 @@
 /**
  * PredictionStorageService — Store and retrieve stock predictions for accuracy tracking
- * 
- * Storage: SQLite (local) or JSON file (Vercel fallback)
+ *
+ * Storage priority (first available wins):
+ *   1. Supabase  — works everywhere including Vercel
+ *   2. SQLite    — local dev / Railway / Render
+ *   3. Memory    — last resort; resets on cold start
  */
 
 import { createRequire } from 'module';
 import path from 'path';
-import fs from 'fs';
+import { getSupabaseClient } from '../lib/supabase.js';
 
 export interface StockPrediction {
   id?: number;
   stock_symbol: string;
-  prediction_date: string; // ISO date when prediction was made
-  target_date: string; // ISO date for next trading day
+  prediction_date: string;
+  target_date: string;
   prediction: 'Bullish' | 'Bearish' | 'Neutral';
   confidence: number;
   predicted_price: number;
@@ -32,30 +35,22 @@ export interface StockPrediction {
   created_at?: number;
 }
 
-type SqliteDB = {
-  exec: (sql: string) => void;
-  prepare: (sql: string) => any;
-};
+// ─── SQLite ───────────────────────────────────────────────────────────────────
 
-let db: SqliteDB | null = null;
-let dbInitialized = false;
-const JSON_STORE_PATH = path.join(process.cwd(), 'predictions-store.json');
-// In-memory fallback for Vercel (ephemeral, resets on cold start)
-const memoryStore: StockPrediction[] = [];
+type SqliteDB = { exec: (sql: string) => void; prepare: (sql: string) => any };
+let sqliteDb: SqliteDB | null = null;
+let sqliteInitialized = false;
 
-function getDb(): SqliteDB | null {
-  if (dbInitialized) return db;
-  dbInitialized = true;
-  if (process.env.VERCEL) {
-    console.log('[PredictionStorage] Vercel environment — using in-memory storage');
-    return null;
-  }
+function getSqliteDb(): SqliteDB | null {
+  if (sqliteInitialized) return sqliteDb;
+  sqliteInitialized = true;
+  if (process.env.VERCEL) return null;
   try {
     const _require = createRequire(import.meta.url);
     const Database = _require('better-sqlite3');
     const dbPath = path.join(process.cwd(), 'predictions.db');
-    db = new Database(dbPath) as SqliteDB;
-    db.exec(`
+    sqliteDb = new Database(dbPath) as SqliteDB;
+    sqliteDb.exec(`
       CREATE TABLE IF NOT EXISTS predictions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         stock_symbol TEXT NOT NULL,
@@ -72,28 +67,57 @@ function getDb(): SqliteDB | null {
         created_at INTEGER NOT NULL
       )
     `);
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_target_date ON predictions(target_date)`);
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_stock_symbol ON predictions(stock_symbol)`);
+    sqliteDb.exec(`CREATE INDEX IF NOT EXISTS idx_target_date ON predictions(target_date)`);
+    sqliteDb.exec(`CREATE INDEX IF NOT EXISTS idx_stock_symbol ON predictions(stock_symbol)`);
     console.log('[PredictionStorage] SQLite storage initialized');
   } catch {
-    if (process.env.VERCEL) {
-      // Read-only filesystem on Vercel — stay in-memory (db remains null)
-      console.log('[PredictionStorage] SQLite unavailable on Vercel — using in-memory storage');
-    } else {
-      console.log('[PredictionStorage] Using JSON file storage');
-      if (!fs.existsSync(JSON_STORE_PATH)) {
-        fs.writeFileSync(JSON_STORE_PATH, JSON.stringify([]));
-      }
-    }
+    console.log('[PredictionStorage] SQLite unavailable');
   }
-  return db;
+  return sqliteDb;
 }
 
+// ─── In-memory fallback ───────────────────────────────────────────────────────
+const memoryStore: StockPrediction[] = [];
+
+// ─── Helper ───────────────────────────────────────────────────────────────────
+
+function calcAccuracy(prediction: string, actualChange: number): number {
+  const predictedDir = prediction === 'Bullish' ? 1 : prediction === 'Bearish' ? -1 : 0;
+  const actualDir = actualChange > 0 ? 1 : actualChange < 0 ? -1 : 0;
+  return predictedDir === actualDir ? 100 : 0;
+}
+
+// ─── Service ──────────────────────────────────────────────────────────────────
+
 export class PredictionStorageService {
-  
-  static savePrediction(pred: StockPrediction): void {
+
+  static async savePrediction(pred: StockPrediction): Promise<void> {
     const now = Date.now();
-    const db = getDb();
+
+    // 1. Supabase
+    const sb = getSupabaseClient();
+    if (sb) {
+      try {
+        const { error } = await sb.from('predictions').insert({
+          stock_symbol: pred.stock_symbol,
+          prediction_date: pred.prediction_date,
+          target_date: pred.target_date,
+          prediction: pred.prediction,
+          confidence: pred.confidence,
+          predicted_price: pred.predicted_price,
+          signals: pred.signals,
+          explanation: pred.explanation,
+          created_at: now,
+        });
+        if (!error) return;
+        console.error('[PredictionStorage] Supabase insert error:', error.message);
+      } catch (e: any) {
+        console.error('[PredictionStorage] Supabase insert exception:', e.message);
+      }
+    }
+
+    // 2. SQLite
+    const db = getSqliteDb();
     if (db) {
       db.prepare(`
         INSERT INTO predictions (
@@ -101,145 +125,161 @@ export class PredictionStorageService {
           predicted_price, signals, explanation, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        pred.stock_symbol,
-        pred.prediction_date,
-        pred.target_date,
-        pred.prediction,
-        pred.confidence,
-        pred.predicted_price,
-        JSON.stringify(pred.signals),
-        pred.explanation,
-        now
+        pred.stock_symbol, pred.prediction_date, pred.target_date,
+        pred.prediction, pred.confidence, pred.predicted_price,
+        JSON.stringify(pred.signals), pred.explanation, now
       );
-    } else if (!process.env.VERCEL && fs.existsSync(JSON_STORE_PATH)) {
-      const data = JSON.parse(fs.readFileSync(JSON_STORE_PATH, 'utf-8')) as StockPrediction[];
-      data.push({ ...pred, id: data.length + 1, created_at: now });
-      fs.writeFileSync(JSON_STORE_PATH, JSON.stringify(data, null, 2));
-    } else {
-      memoryStore.push({ ...pred, id: memoryStore.length + 1, created_at: now });
+      return;
     }
+
+    // 3. Memory
+    memoryStore.push({ ...pred, id: memoryStore.length + 1, created_at: now });
   }
-  
-  static getPredictionsByDate(targetDate: string): StockPrediction[] {
-    const db = getDb();
+
+  static async getPredictionsByDate(targetDate: string): Promise<StockPrediction[]> {
+    // 1. Supabase
+    const sb = getSupabaseClient();
+    if (sb) {
+      try {
+        const { data, error } = await sb
+          .from('predictions')
+          .select('*')
+          .eq('target_date', targetDate)
+          .order('confidence', { ascending: false });
+        if (!error && data) {
+          return data.map((r: any) => ({
+            ...r,
+            signals: typeof r.signals === 'string' ? JSON.parse(r.signals) : r.signals,
+          }));
+        }
+      } catch (e: any) {
+        console.error('[PredictionStorage] Supabase query error:', e.message);
+      }
+    }
+
+    // 2. SQLite
+    const db = getSqliteDb();
     if (db) {
       const rows = db.prepare('SELECT * FROM predictions WHERE target_date = ? ORDER BY confidence DESC').all(targetDate);
-      return rows.map((r: any) => ({
-        ...r,
-        signals: JSON.parse(r.signals),
-      }));
-    } else if (!process.env.VERCEL && fs.existsSync(JSON_STORE_PATH)) {
-      const data = JSON.parse(fs.readFileSync(JSON_STORE_PATH, 'utf-8')) as StockPrediction[];
-      return data.filter(p => p.target_date === targetDate);
-    } else {
-      return memoryStore.filter(p => p.target_date === targetDate);
+      return rows.map((r: any) => ({ ...r, signals: JSON.parse(r.signals) }));
     }
+
+    // 3. Memory
+    return memoryStore.filter(p => p.target_date === targetDate);
   }
-  
-  static updateActualPrice(id: number, actualPrice: number, actualChange: number): void {
-    const db = getDb();
+
+  static async updateActualPrice(id: number, actualPrice: number, actualChange: number): Promise<void> {
+    // 1. Supabase
+    const sb = getSupabaseClient();
+    if (sb) {
+      try {
+        const { data } = await sb.from('predictions').select('prediction').eq('id', id).single();
+        if (data) {
+          const accuracy = calcAccuracy(data.prediction, actualChange);
+          await sb.from('predictions')
+            .update({ actual_price: actualPrice, actual_change: actualChange, accuracy })
+            .eq('id', id);
+          return;
+        }
+      } catch (e: any) {
+        console.error('[PredictionStorage] Supabase update error:', e.message);
+      }
+    }
+
+    // 2. SQLite
+    const db = getSqliteDb();
     if (db) {
-      const pred = db.prepare('SELECT * FROM predictions WHERE id = ?').get(id) as any;
+      const pred = db.prepare('SELECT prediction FROM predictions WHERE id = ?').get(id) as any;
       if (!pred) return;
-      
-      const predictedDirection = pred.prediction === 'Bullish' ? 1 : pred.prediction === 'Bearish' ? -1 : 0;
-      const actualDirection = actualChange > 0 ? 1 : actualChange < 0 ? -1 : 0;
-      const accuracy = predictedDirection === actualDirection ? 100 : 0;
-      
-      db.prepare(`
-        UPDATE predictions 
-        SET actual_price = ?, actual_change = ?, accuracy = ?
-        WHERE id = ?
-      `).run(actualPrice, actualChange, accuracy, id);
-    } else if (!process.env.VERCEL && fs.existsSync(JSON_STORE_PATH)) {
-      const data = JSON.parse(fs.readFileSync(JSON_STORE_PATH, 'utf-8')) as StockPrediction[];
-      const pred = data.find(p => p.id === id);
-      if (!pred) return;
-      
-      const predictedDirection = pred.prediction === 'Bullish' ? 1 : pred.prediction === 'Bearish' ? -1 : 0;
-      const actualDirection = actualChange > 0 ? 1 : actualChange < 0 ? -1 : 0;
-      pred.accuracy = predictedDirection === actualDirection ? 100 : 0;
-      pred.actual_price = actualPrice;
-      pred.actual_change = actualChange;
-      
-      fs.writeFileSync(JSON_STORE_PATH, JSON.stringify(data, null, 2));
-    } else {
-      const pred = memoryStore.find(p => p.id === id);
-      if (!pred) return;
-      const predictedDirection = pred.prediction === 'Bullish' ? 1 : pred.prediction === 'Bearish' ? -1 : 0;
-      const actualDirection = actualChange > 0 ? 1 : actualChange < 0 ? -1 : 0;
-      pred.accuracy = predictedDirection === actualDirection ? 100 : 0;
+      const accuracy = calcAccuracy(pred.prediction, actualChange);
+      db.prepare('UPDATE predictions SET actual_price = ?, actual_change = ?, accuracy = ? WHERE id = ?')
+        .run(actualPrice, actualChange, accuracy, id);
+      return;
+    }
+
+    // 3. Memory
+    const pred = memoryStore.find(p => p.id === id);
+    if (pred) {
+      pred.accuracy = calcAccuracy(pred.prediction, actualChange);
       pred.actual_price = actualPrice;
       pred.actual_change = actualChange;
     }
   }
-  
-  static getAccuracyStats(fromDate?: string, toDate?: string): {
-    total: number;
-    correct: number;
-    accuracy: number;
-    avgConfidence: number;
-  } {
+
+  static async getAccuracyStats(fromDate?: string, toDate?: string): Promise<{
+    total: number; correct: number; accuracy: number; avgConfidence: number;
+  }> {
     let predictions: StockPrediction[] = [];
-    const db = getDb();
-    if (db) {
-      let query = 'SELECT * FROM predictions WHERE accuracy IS NOT NULL';
-      const params: any[] = [];
-      
-      if (fromDate) {
-        query += ' AND target_date >= ?';
-        params.push(fromDate);
+
+    // 1. Supabase
+    const sb = getSupabaseClient();
+    if (sb) {
+      try {
+        let query = sb.from('predictions').select('*').not('accuracy', 'is', null);
+        if (fromDate) query = query.gte('target_date', fromDate);
+        if (toDate) query = query.lte('target_date', toDate);
+        const { data, error } = await query;
+        if (!error && data) {
+          predictions = data.map((r: any) => ({
+            ...r,
+            signals: typeof r.signals === 'string' ? JSON.parse(r.signals) : r.signals,
+          }));
+        }
+      } catch (e: any) {
+        console.error('[PredictionStorage] Supabase stats error:', e.message);
       }
-      if (toDate) {
-        query += ' AND target_date <= ?';
-        params.push(toDate);
-      }
-      
-      const rows = db.prepare(query).all(...params);
-      predictions = rows.map((r: any) => ({ ...r, signals: JSON.parse(r.signals) }));
-    } else if (!process.env.VERCEL && fs.existsSync(JSON_STORE_PATH)) {
-      const data = JSON.parse(fs.readFileSync(JSON_STORE_PATH, 'utf-8')) as StockPrediction[];
-      predictions = data.filter(p => {
-        if (p.accuracy === undefined) return false;
-        if (fromDate && p.target_date < fromDate) return false;
-        if (toDate && p.target_date > toDate) return false;
-        return true;
-      });
     } else {
-      predictions = memoryStore.filter(p => {
-        if (p.accuracy === undefined) return false;
-        if (fromDate && p.target_date < fromDate) return false;
-        if (toDate && p.target_date > toDate) return false;
-        return true;
-      });
+      // 2. SQLite
+      const db = getSqliteDb();
+      if (db) {
+        let q = 'SELECT * FROM predictions WHERE accuracy IS NOT NULL';
+        const params: any[] = [];
+        if (fromDate) { q += ' AND target_date >= ?'; params.push(fromDate); }
+        if (toDate) { q += ' AND target_date <= ?'; params.push(toDate); }
+        const rows = db.prepare(q).all(...params);
+        predictions = rows.map((r: any) => ({ ...r, signals: JSON.parse(r.signals) }));
+      } else {
+        // 3. Memory
+        predictions = memoryStore.filter(p => {
+          if (p.accuracy === undefined) return false;
+          if (fromDate && p.target_date < fromDate) return false;
+          if (toDate && p.target_date > toDate) return false;
+          return true;
+        });
+      }
     }
-    
+
     const total = predictions.length;
     const correct = predictions.filter(p => p.accuracy === 100).length;
-    const avgConfidence = total > 0 
-      ? predictions.reduce((sum, p) => sum + p.confidence, 0) / total 
-      : 0;
-    
-    return {
-      total,
-      correct,
-      accuracy: total > 0 ? (correct / total) * 100 : 0,
-      avgConfidence,
-    };
+    const avgConfidence = total > 0 ? predictions.reduce((s, p) => s + p.confidence, 0) / total : 0;
+    return { total, correct, accuracy: total > 0 ? (correct / total) * 100 : 0, avgConfidence };
   }
-  
-  static getAllDatesWithPredictions(): string[] {
-    const db = getDb();
+
+  static async getAllDatesWithPredictions(): Promise<string[]> {
+    // 1. Supabase
+    const sb = getSupabaseClient();
+    if (sb) {
+      try {
+        const { data, error } = await sb
+          .from('predictions')
+          .select('target_date')
+          .order('target_date', { ascending: false });
+        if (!error && data) {
+          return [...new Set(data.map((r: any) => r.target_date as string))];
+        }
+      } catch (e: any) {
+        console.error('[PredictionStorage] Supabase dates error:', e.message);
+      }
+    }
+
+    // 2. SQLite
+    const db = getSqliteDb();
     if (db) {
       const rows = db.prepare('SELECT DISTINCT target_date FROM predictions ORDER BY target_date DESC').all();
       return rows.map((r: any) => r.target_date);
-    } else if (!process.env.VERCEL && fs.existsSync(JSON_STORE_PATH)) {
-      const data = JSON.parse(fs.readFileSync(JSON_STORE_PATH, 'utf-8')) as StockPrediction[];
-      const dates = [...new Set(data.map(p => p.target_date))];
-      return dates.sort().reverse();
-    } else {
-      const dates = [...new Set(memoryStore.map(p => p.target_date))];
-      return dates.sort().reverse();
     }
+
+    // 3. Memory
+    return [...new Set(memoryStore.map(p => p.target_date))].sort().reverse();
   }
 }

@@ -11,3 +11,7 @@ coverage/
 
 server.cjs
 server.js
+
+# SQLite databases — contain tokens and local data, never commit
+*.db
+predictions-store.json

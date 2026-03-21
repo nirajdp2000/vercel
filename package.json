@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build",
-    "build:server": "node --input-type=module -e \"import {build} from 'esbuild'; build({entryPoints:['server.ts'],bundle:true,platform:'node',target:'node20',format:'cjs',outfile:'server.cjs',external:['better-sqlite3','fsevents','vite']}).then(()=>console.log('server.cjs built'))\"",
+    "build:server": "node --input-type=module -e \"import {build} from 'esbuild'; build({entryPoints:['server.ts'],bundle:true,platform:'node',target:'node20',format:'cjs',outfile:'server.cjs',external:['better-sqlite3','fsevents','vite','@supabase/supabase-js']}).then(()=>console.log('server.cjs built'))\"",
     "start": "NODE_ENV=production node --loader tsx/esm server.ts",
     "start:win": "set NODE_ENV=production && tsx server.ts",
     "vercel-build": "npm run build && npm run build:server",
@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
+    "@supabase/supabase-js": "^2.99.3",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "axios": "^1.13.6",

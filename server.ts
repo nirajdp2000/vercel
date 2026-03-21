@@ -1630,9 +1630,65 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] =>
       await upstoxService.handleOAuthCallback(String(code), getUpstoxCallbackUrl(req));
       logAction("upstox.callback.success", { code: "***" });
 
-      // Token is already stored in SQLite — auto-redirect to app, no manual steps needed.
-      // Show a brief success screen that auto-redirects after 2 seconds.
-      res.send(`<!DOCTYPE html>
+      const storedToken = await upstoxService.tokenManager.getValidAccessToken();
+      const isVercel = !!process.env.VERCEL;
+
+      // On Vercel: token lives in memory only — show it so user can persist it in dashboard
+      // On local/Railway/Render: token is in SQLite — auto-redirect immediately
+      if (isVercel && storedToken) {
+        res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Connected — StockPulse</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{min-height:100vh;display:flex;align-items:center;justify-content:center;
+         background:#0a0a0b;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#fff;padding:16px}
+    .card{max-width:560px;width:100%}
+    .icon{font-size:48px;text-align:center;margin-bottom:16px}
+    h2{font-size:20px;font-weight:800;color:#10b981;margin-bottom:8px;text-align:center}
+    p{color:#a1a1aa;font-size:13px;line-height:1.6;margin-bottom:8px;text-align:center}
+    .token-box{background:#111;border:1px solid #27272a;border-radius:8px;padding:12px;margin:16px 0;position:relative}
+    .token-label{font-size:11px;color:#71717a;margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+    .token-val{font-family:monospace;font-size:11px;color:#10b981;word-break:break-all;line-height:1.5}
+    .copy-btn{margin-top:10px;width:100%;padding:8px;background:#10b981;color:#000;border:none;border-radius:6px;font-weight:700;font-size:12px;cursor:pointer}
+    .copy-btn:active{background:#059669}
+    .warn{background:#1c1400;border:1px solid #854d0e;border-radius:8px;padding:12px;margin:12px 0;font-size:12px;color:#fbbf24;line-height:1.6}
+    .warn strong{display:block;margin-bottom:4px;font-size:13px}
+    .steps{background:#0f172a;border:1px solid #1e3a5f;border-radius:8px;padding:12px;margin:12px 0;font-size:12px;color:#93c5fd;line-height:1.8}
+    .steps strong{display:block;margin-bottom:4px;color:#60a5fa;font-size:13px}
+    .go-btn{display:block;width:100%;padding:12px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;text-align:center;text-decoration:none;margin-top:16px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">✅</div>
+    <h2>Connected to Upstox!</h2>
+    <p>Your account is linked. Copy the token below and save it in Vercel to keep the connection alive across restarts.</p>
+    <div class="token-box">
+      <div class="token-label">UPSTOX_ACCESS_TOKEN — copy this</div>
+      <div class="token-val" id="tok">${storedToken}</div>
+      <button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('tok').innerText).then(()=>{this.textContent='✅ Copied!';setTimeout(()=>this.textContent='Copy Token',2000)})">Copy Token</button>
+    </div>
+    <div class="warn">
+      <strong>⚠️ Vercel: one extra step required</strong>
+      This token is in memory only and will be lost on the next cold start. Paste it into your Vercel dashboard to make it permanent.
+    </div>
+    <div class="steps">
+      <strong>How to persist (takes 30 seconds):</strong>
+      1. Copy the token above<br>
+      2. Go to <a href="https://vercel.com/dashboard" target="_blank" style="color:#60a5fa">vercel.com/dashboard</a> → your project → Settings → Environment Variables<br>
+      3. Set <code>UPSTOX_ACCESS_TOKEN</code> = (paste token) for Production<br>
+      4. Click Save → Redeploy (or just use the app — it works until next cold start)
+    </div>
+    <a href="/" class="go-btn">Go to App →</a>
+  </div>
+</body>
+</html>`);
+      } else {
+        // Non-Vercel: token is in SQLite, auto-redirect
+        res.send(`<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
@@ -1647,8 +1703,7 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] =>
     h2{font-size:22px;font-weight:800;color:#10b981;margin-bottom:10px}
     p{color:#a1a1aa;font-size:14px;line-height:1.6;margin-bottom:6px}
     .bar-wrap{margin:28px auto 0;width:200px;height:4px;background:#27272a;border-radius:4px;overflow:hidden}
-    .bar{height:100%;width:0;background:linear-gradient(90deg,#6366f1,#10b981);border-radius:4px;
-         animation:fill 2s linear forwards}
+    .bar{height:100%;width:0;background:linear-gradient(90deg,#6366f1,#10b981);border-radius:4px;animation:fill 2s linear forwards}
     .note{margin-top:16px;font-size:11px;color:#52525b}
     @keyframes pop{0%{transform:scale(.5);opacity:0}80%{transform:scale(1.15)}100%{transform:scale(1);opacity:1}}
     @keyframes fill{to{width:100%}}
@@ -1666,6 +1721,7 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] =>
   <script>setTimeout(()=>location.replace('/'),2000)</script>
 </body>
 </html>`);
+      }
     } catch (error: any) {
       logError("upstox.callback.failed", error);
       res.status(500).send(`<!DOCTYPE html>
