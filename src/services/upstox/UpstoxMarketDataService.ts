@@ -33,7 +33,9 @@ interface SectorData {
 export class UpstoxMarketDataService {
   private upstoxService: UpstoxService;
   private quoteCache: Map<string, { data: any; expiresAt: number }> = new Map();
-  private readonly CACHE_TTL = 5000; // 5 seconds cache
+  private sectorCache: { data: SectorData[]; expiresAt: number } | null = null;
+  private readonly CACHE_TTL = 15000;       // 15s quote cache
+  private readonly SECTOR_CACHE_TTL = 30000; // 30s sector cache
 
   constructor() {
     this.upstoxService = UpstoxService.getInstance();
@@ -154,9 +156,14 @@ export class UpstoxMarketDataService {
   }
 
   /**
-   * Get sector strength data from real market
+   * Get sector strength data from real market — single batched Upstox call
    */
   async getSectorStrength(): Promise<SectorData[]> {
+    // Return cached sector data if still fresh
+    if (this.sectorCache && this.sectorCache.expiresAt > Date.now()) {
+      return this.sectorCache.data;
+    }
+
     const isConnected = await this.isConnected();
     
     if (!isConnected) {
@@ -165,27 +172,34 @@ export class UpstoxMarketDataService {
 
     try {
       const sectorMap = this.getSectorMapping();
-      const sectorData: SectorData[] = [];
-      
-      for (const [sector, symbols] of Object.entries(sectorMap)) {
-        const quotes = await this.getMarketQuotes(symbols);
-        const avgChange = quotes.reduce((sum, q) => sum + q.changePercent, 0) / quotes.length;
-        const leaders = quotes
+      // Collect ALL symbols across all sectors in one array
+      const allSymbols = Array.from(new Set(Object.values(sectorMap).flat()));
+      // Single batched API call instead of one per sector
+      const allQuotes = await this.getMarketQuotes(allSymbols);
+      const quoteBySymbol = new Map(allQuotes.map(q => [q.symbol, q]));
+
+      const sectorData: SectorData[] = Object.entries(sectorMap).map(([sector, symbols]) => {
+        const quotes = symbols.map(s => quoteBySymbol.get(s)).filter(Boolean) as typeof allQuotes;
+        const avgChange = quotes.length
+          ? quotes.reduce((sum, q) => sum + q.changePercent, 0) / quotes.length
+          : 0;
+        const leaders = [...quotes]
           .sort((a, b) => b.changePercent - a.changePercent)
           .slice(0, 3)
           .map(q => q.symbol);
-        
-        sectorData.push({
+        return {
           sector,
           strength: avgChange,
-          momentum: avgChange > 1 ? 'Strong Bullish' : 
-                   avgChange > 0.5 ? 'Bullish' : 
-                   avgChange > -0.5 ? 'Neutral' : 'Bearish',
+          momentum: avgChange > 1 ? 'Strong Bullish' :
+                    avgChange > 0.5 ? 'Bullish' :
+                    avgChange > -0.5 ? 'Neutral' : 'Bearish',
           leaders
-        });
-      }
-      
-      return sectorData.sort((a, b) => b.strength - a.strength);
+        };
+      });
+
+      const sorted = sectorData.sort((a, b) => b.strength - a.strength);
+      this.sectorCache = { data: sorted, expiresAt: Date.now() + this.SECTOR_CACHE_TTL };
+      return sorted;
     } catch (error) {
       console.error('[UpstoxMarketDataService] Failed to fetch sectors:', error);
       return this.getSimulatedSectors();

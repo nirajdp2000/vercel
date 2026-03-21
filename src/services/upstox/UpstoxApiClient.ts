@@ -19,9 +19,10 @@ export class UpstoxApiClient {
     this.tokenManager = tokenManager;
     this.axiosInstance = axios.create({
       baseURL: 'https://api.upstox.com/v2',
-      timeout: 15000,
+      timeout: 8000,
       headers: {
         'Accept': 'application/json',
+        'Accept-Encoding': 'gzip, deflate',
       },
     });
   }

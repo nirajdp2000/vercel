@@ -2664,7 +2664,8 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
     const lastPrice = parseFloat(req.query.lastPrice as string) || 0;
 
     try {
-      const token = await UpstoxService.getInstance().tokenManager.getValidAccessToken();
+      const token = await UpstoxService.getInstance().tokenManager.getValidAccessToken()
+        || process.env.UPSTOX_ACCESS_TOKEN || null;
       if (!token || !instrumentKey) throw new Error("no_token");
 
       const encodedKey = encodeURIComponent(String(instrumentKey));
@@ -2715,7 +2716,8 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
     const lastPrice = parseFloat(req.query.lastPrice as string) || 100;
 
     try {
-      const token = await UpstoxService.getInstance().tokenManager.getValidAccessToken();
+      const token = await UpstoxService.getInstance().tokenManager.getValidAccessToken()
+        || process.env.UPSTOX_ACCESS_TOKEN || null;
       if (!token || !instrumentKey) throw new Error("no_token");
 
       const encodedKey = encodeURIComponent(String(instrumentKey));
