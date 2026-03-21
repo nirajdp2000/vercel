@@ -1640,7 +1640,12 @@ function NextDayPredictions() {
             </div>
           )}
         </div>
-      )}// ─── Main Tab ─────────────────────────────────────────────────────────────────
+      )}
+    </div>
+  );
+}
+
+// ─── Main Tab ─────────────────────────────────────────────────────────────────
 
 type PanelId = 'rankings' | 'rally' | 'alerts' | 'news' | 'macro' | 'sectors' | 'predictions';
 
