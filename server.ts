@@ -1,5 +1,5 @@
 import express from "express";
-import { initUniverse, getUniverse, setFallbackUniverse } from "./src/services/StockUniverseService";
+import { initUniverse, getUniverse, getUniverseAsync, setFallbackUniverse } from "./src/services/StockUniverseService";
 import axios from "axios";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
@@ -1398,12 +1398,12 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] =>
   };
 
   // API to search stocks — uses full NSE+BSE universe from StockUniverseService
-  app.get("/api/stocks/search", (req, res) => {
+  app.get("/api/stocks/search", async (req, res) => {
     const raw = (req.query.q as string || "").trim();
     if (!raw) return res.json([]);
     const q = raw.toUpperCase();
 
-    const universe = getUniverse();
+    const universe = await getUniverseAsync();
     const exact: typeof universe = [];
     const startsWith: typeof universe = [];
     const partial: typeof universe = [];
@@ -1420,18 +1420,18 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] =>
 
     res.json(ranked.map(s => ({
       symbol: s.symbol,
-      name:   s.symbol,          // instrument JSON has no company name — symbol used
+      name:   s.symbol,
       key:    s.instrumentKey,
       exchange: s.exchange,
       sector: s.sector,
     })));
   });
 
-  // Full universe endpoint — preloaded by client for in-memory search
-  app.get("/api/stocks/universe", (req, res) => {
-    const universe = getUniverse();
+  // Full universe endpoint — waits for real universe before responding
+  app.get("/api/stocks/universe", async (req, res) => {
+    const universe = await getUniverseAsync();
     console.log(`[Universe] Serving ${universe.length} stocks`);
-    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Cache-Control', 'public, max-age=3600'); // cache 1h — universe is stable
     res.json(universe.map(s => ({
       symbol:   s.symbol,
       name:     s.name || s.symbol,
@@ -1486,10 +1486,9 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] =>
   app.get("/api/stocks/historical", withErrorBoundary(async (req, res) => {
     const { instrumentKey, interval, fromDate, toDate } = req.query;
 
-    // Use singleton directly — safe to call before the local `upstoxService` const below
     const _svc = UpstoxService.getInstance();
+    // Always get token fresh — checks DB, env var, and refresh in one call
     let token = await _svc.tokenManager.getValidAccessToken();
-    if (!token) token = process.env.UPSTOX_ACCESS_TOKEN || null;
 
     const selectedInterval = (interval as string) || "5minute";
     const to   = (toDate   as string) || new Date().toISOString().slice(0, 10);
@@ -1508,14 +1507,14 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] =>
       return res.json(cachedPayload);
     }
 
-    if (!token || token === "your_token_here") {
-      const isAuthenticated = await _svc.isAuthenticated();
-      const message = isAuthenticated
-        ? "Upstox connected but token refresh in progress. Using local replay temporarily."
-        : "Connect to Upstox for live market data. Visit /upstox/connect to authenticate.";
-      const fallbackPayload = createSimulatedHistoricalPayload(String(instrumentKey), selectedInterval, from, to, message);
+    // No valid token — return simulated with clear message
+    if (!token) {
+      const fallbackPayload = createSimulatedHistoricalPayload(
+        String(instrumentKey), selectedInterval, from, to,
+        "Connect to Upstox for live market data. Visit /upstox/connect to authenticate."
+      );
       cacheHistoricalPayload(cacheKey, fallbackPayload);
-      logAction("historical.fallback.used", { instrumentKey, interval: selectedInterval, reason: "missing_upstox_token" });
+      logAction("historical.fallback.used", { instrumentKey, interval: selectedInterval, reason: "no_token" });
       return res.json(fallbackPayload);
     }
 
@@ -1955,10 +1954,10 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] =>
     const tick = async () => {
       tickCount++;
       try {
-        let token = await upstoxService.tokenManager.getValidAccessToken();
-        if (!token) token = process.env.UPSTOX_ACCESS_TOKEN || null;
+        // getValidAccessToken now handles env var fallback internally
+        const token = await upstoxService.tokenManager.getValidAccessToken();
 
-        if (!token || token === "your_token_here") {
+        if (!token) {
           // Always send no_auth — never stop sending so client knows state
           sendEvent({ type: "no_auth", message: "Upstox not authenticated. Visit /upstox/connect to authorize." });
           return;

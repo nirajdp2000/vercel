@@ -91,9 +91,10 @@ export class UpstoxTokenManager {
   constructor() {
     // Seed from env var on startup — useful for Vercel where token is set as env var
     const envToken = process.env.UPSTOX_ACCESS_TOKEN;
-    if (envToken && !readRecord()) {
+    if (envToken && envToken !== 'your_token_here' && envToken.length > 20 && !readRecord()) {
       const expiresAt = Date.now() + 24 * 60 * 60 * 1000; // assume 24h
       writeRecord({ access_token: envToken, refresh_token: null, expires_at: expiresAt });
+      console.log('[UpstoxTokenManager] Seeded token from UPSTOX_ACCESS_TOKEN env var');
     }
   }
 
@@ -132,23 +133,44 @@ export class UpstoxTokenManager {
 
   async getValidAccessToken(): Promise<string | null> {
     const record = readRecord();
+
+    // ── No record at all ──────────────────────────────────────────────────────
     if (!record) {
+      // Last-resort: env var (Vercel cold-start after OAuth, or manual token set)
+      const envToken = process.env.UPSTOX_ACCESS_TOKEN;
+      if (envToken && envToken !== 'your_token_here' && envToken.length > 20) {
+        console.log('[UpstoxTokenManager] No DB record — seeding from UPSTOX_ACCESS_TOKEN env var');
+        const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
+        writeRecord({ access_token: envToken, refresh_token: null, expires_at: expiresAt });
+        return envToken;
+      }
       console.log('[UpstoxTokenManager] No tokens found');
       return null;
     }
+
+    // ── Token expired ─────────────────────────────────────────────────────────
     if (this.isExpired(record.expires_at)) {
-      if (!record.refresh_token) {
-        console.error('[UpstoxTokenManager] Token expired, no refresh token');
-        return null;
+      // Try refresh token first
+      if (record.refresh_token) {
+        try {
+          await this.refreshAccessToken(record.refresh_token);
+          return readRecord()?.access_token || null;
+        } catch (e) {
+          console.error('[UpstoxTokenManager] Auto-refresh failed:', e);
+        }
       }
-      try {
-        await this.refreshAccessToken(record.refresh_token);
-        return readRecord()?.access_token || null;
-      } catch (e) {
-        console.error('[UpstoxTokenManager] Auto-refresh failed:', e);
-        return null;
+      // Fall back to env var (Vercel: token set manually in dashboard)
+      const envToken = process.env.UPSTOX_ACCESS_TOKEN;
+      if (envToken && envToken !== 'your_token_here' && envToken.length > 20) {
+        console.log('[UpstoxTokenManager] Expired token — falling back to UPSTOX_ACCESS_TOKEN env var');
+        const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
+        writeRecord({ access_token: envToken, refresh_token: null, expires_at: expiresAt });
+        return envToken;
       }
+      console.error('[UpstoxTokenManager] Token expired, no refresh token, no env fallback');
+      return null;
     }
+
     const minsLeft = Math.round((record.expires_at - Date.now()) / 60000);
     console.log(`[UpstoxTokenManager] Using valid access token (expires in ${minsLeft}m, length=${record.access_token.length})`);
     return record.access_token;

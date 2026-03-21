@@ -259,7 +259,7 @@ export async function initUniverse(): Promise<void> {
 }
 
 export function getUniverse(): StockProfile[] {
-  // Refresh if stale
+  // Trigger background refresh if cache is stale (but don't block)
   if (Date.now() - cacheTimestamp > CACHE_TTL_MS && !loadPromise) {
     loadPromise = loadUniverse().then(u => {
       cachedUniverse = u;
@@ -268,11 +268,22 @@ export function getUniverse(): StockProfile[] {
       return u;
     });
   }
-  // Return cached if available (even if stale refresh is in progress)
-  // Fall back to embedded list if cache is empty
+  // Return real cached universe if available, otherwise fallback
+  // NOTE: fallback is only used before initUniverse() completes on first boot
   return cachedUniverse.length > 0 ? cachedUniverse : fallbackUniverse;
 }
 
-export function getUniverseSize(): number {
-  return getUniverse().length;
+/**
+ * Async version — waits for the in-flight load if universe isn't ready yet.
+ * Use this in API endpoints that need the full universe.
+ */
+export async function getUniverseAsync(): Promise<StockProfile[]> {
+  if (cachedUniverse.length > 0) return cachedUniverse;
+  if (loadPromise) {
+    try { cachedUniverse = await loadPromise; } catch { /* use fallback */ }
+    return cachedUniverse.length > 0 ? cachedUniverse : fallbackUniverse;
+  }
+  // Not started yet — kick off and wait
+  await initUniverse();
+  return cachedUniverse.length > 0 ? cachedUniverse : fallbackUniverse;
 }
