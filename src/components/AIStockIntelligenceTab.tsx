@@ -67,6 +67,10 @@ interface NewsItem {
   earlyRally?: boolean;
   // base fallback fields
   rallyRelevance?: string;
+  // credibility fields (from real news feed)
+  credibilityScore?: number;
+  verified?: boolean;
+  fakeNewsFlags?: string[];
 }
 
 interface SectorStrength {
@@ -719,6 +723,23 @@ function NewsFeedPanel({ news }: { news: NewsItem[] }) {
                         AI {item.aiScore}
                       </span>
                     )}
+                    {/* Credibility badge */}
+                    {item.credibilityScore !== undefined && (
+                      <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[8px] font-black ${
+                        item.credibilityScore >= 0.75 ? 'bg-emerald-500/10 text-emerald-400'
+                        : item.credibilityScore >= 0.55 ? 'bg-amber-500/10 text-amber-400'
+                        : 'bg-rose-500/10 text-rose-400'
+                      }`}>
+                        {item.credibilityScore >= 0.75 ? '★' : item.credibilityScore >= 0.55 ? '◆' : '▲'}
+                        {Math.round(item.credibilityScore * 100)}%
+                      </span>
+                    )}
+                    {/* Verified badge */}
+                    {item.verified && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-cyan-500/10 border border-cyan-500/20 px-1.5 py-0.5 text-[8px] font-black text-cyan-400">
+                        ✓ Verified
+                      </span>
+                    )}
                   </div>
                   <p className="text-[11px] font-bold text-white leading-snug">{item.headline}</p>
                 </div>
@@ -755,7 +776,13 @@ function NewsFeedPanel({ news }: { news: NewsItem[] }) {
                     <span className="text-amber-400 font-bold">{item.volumeSpike.toFixed(1)}x vol</span>
                   )}
                   <span className="text-white/25 font-bold uppercase tracking-[0.1em]">{item.sector}</span>
-                  <span className="text-white/20">{item.source}</span>
+                  <span className={`font-bold ${
+                    item.credibilityScore !== undefined
+                      ? item.credibilityScore >= 0.75 ? 'text-emerald-400/60'
+                        : item.credibilityScore >= 0.55 ? 'text-amber-400/60'
+                        : 'text-rose-400/60'
+                      : 'text-white/20'
+                  }`}>{item.source}</span>
                   <span className="ml-auto text-white/20 font-mono flex items-center gap-1">
                     <Clock size={8} />
                     {timeAgo(item.timestamp)}
@@ -772,7 +799,13 @@ function NewsFeedPanel({ news }: { news: NewsItem[] }) {
                     : 'text-white/30'
                   }`}>{item.sentiment}</span>
                   <span className="text-white/25 font-bold uppercase tracking-[0.1em]">{item.sector}</span>
-                  <span className="text-white/20">{item.source}</span>
+                  <span className={`font-bold ${
+                    item.credibilityScore !== undefined
+                      ? item.credibilityScore >= 0.75 ? 'text-emerald-400/60'
+                        : item.credibilityScore >= 0.55 ? 'text-amber-400/60'
+                        : 'text-rose-400/60'
+                      : 'text-white/20'
+                  }`}>{item.source}</span>
                   <span className="ml-auto text-white/20 font-mono flex items-center gap-1">
                     <Clock size={8} />
                     {timeAgo(item.timestamp)}

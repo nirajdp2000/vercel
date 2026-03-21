@@ -14,6 +14,7 @@ import {
 import { UpstoxService } from "./src/services/upstox/UpstoxService";
 import { UpstoxMarketDataService } from "./src/services/upstox/UpstoxMarketDataService";
 import { PredictionStorageService } from "./src/services/PredictionStorageService";
+import { fetchNewsIntelligence, getStockSentiment, getTopNews, getSectorSentiment } from "./src/services/NewsIntelligenceService";
 
 import path from "path";
 import fs from "fs";
@@ -3416,6 +3417,9 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
       return aiIntelCache.payload;
     }
 
+    // Pre-fetch real news (uses 8-min cache; non-blocking on failure)
+    const newsIntel = await fetchNewsIntelligence().catch(() => null);
+
     const universe = await createUltraQuantUniverse();
 
     // ── helpers ──────────────────────────────────────────────────────────
@@ -3505,7 +3509,7 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
         0.15 * volQualScore + 0.15 * breakoutScore + 0.10 * drawdownScore
       );
 
-      // Module 3 — Social Sentiment (credibility-filtered)
+      // Module 3 — Social Sentiment (credibility-filtered, real news when available)
       const priceChangePct = prev > 0 ? ((cur - prev) / prev) * 100 : 0;
       const credWeight = clampN(profile.marketCap / 100_000);
       const engScore = clampN((volSpike - 1) / 3);
@@ -3514,12 +3518,19 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
         Technology: 0.75, Financials: 0.65, Healthcare: 0.60,
         Energy: 0.55, Consumer: 0.58,
       };
-      const socialScore = clampN(0.30 * credWeight + 0.30 * engScore + 0.25 * momSentiment + 0.15 * (sectorBuzz[profile.sector] ?? 0.50));
+      const realNews = newsIntel ? getStockSentiment(profile.symbol) : null;
+      const socialScore = realNews && realNews.newsCount > 0
+        ? clampN(0.4 * realNews.socialScore + 0.3 * credWeight + 0.2 * engScore + 0.1 * momSentiment)
+        : clampN(0.30 * credWeight + 0.30 * engScore + 0.25 * momSentiment + 0.15 * (sectorBuzz[profile.sector] ?? 0.50));
 
-      // Module 4 — News Intelligence
+      // Module 4 — News Intelligence (real scores when available)
       const newsBoost: Record<string, number> = { Technology: 0.10, Financials: 0.08, Healthcare: 0.07, Energy: 0.05 };
-      const newsScore = clampN(0.5 + priceChangePct / 20 + (newsBoost[profile.sector] ?? 0.03));
-      const newsImpact = clampN((volSpike - 1) / 4 + (newsBoost[profile.sector] ?? 0.03));
+      const newsScore = realNews && realNews.newsCount > 0
+        ? clampN(realNews.newsScore)
+        : clampN(0.5 + priceChangePct / 20 + (newsBoost[profile.sector] ?? 0.03));
+      const newsImpact = realNews && realNews.newsCount > 0
+        ? clampN(realNews.impactScore)
+        : clampN((volSpike - 1) / 4 + (newsBoost[profile.sector] ?? 0.03));
 
       // Module 5 — Macro
       const macroBase: Record<string, number> = {
@@ -3636,23 +3647,48 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
     const highConf = ranked.filter(r => r.confidence === "HIGH").length;
     const avgScore = ranked.reduce((s, r) => s + r.finalScore, 0) / Math.max(1, ranked.length);
 
+    // Build real news feed — use live RSS items when available, fall back to synthetic
+    const realTopNews = newsIntel ? getTopNews(30) : [];
+    const realNewsFeed = realTopNews.length > 0
+      ? realTopNews.map((item, i) => ({
+          symbol: item.tickers[0] || null,
+          headline: item.title,
+          sector: item.sectors[0] || 'General',
+          impact: item.impact.level,
+          sentiment: item.sentiment.label,
+          source: item.source,
+          credibilityScore: +item.credibility.toFixed(2),
+          verified: item.verified,
+          fakeNewsFlags: item.fakeNewsFlags,
+          priceChange: undefined,
+          volumeSpike: undefined,
+          aiScore: Math.round(item.impact.score * 100),
+          timestamp: item.publishedAt,
+          type: item.tickers.length > 0 ? 'stock' : 'macro',
+          rallyRelevance: item.sentiment.label === 'POSITIVE' ? 'WATCHLIST' : undefined,
+        }))
+      : top50.slice(0, 20).map((r, i) => ({
+          symbol: r.symbol,
+          headline: `${r.symbol} (${r.sector}): ${r.signal} signal — score ${Math.round(r.finalScore * 100)}, vol spike ${r.volumeSpike.toFixed(1)}x, ${r.priceChangePercent >= 0 ? 'up' : 'down'} ${Math.abs(r.priceChangePercent).toFixed(2)}% today`,
+          sector: r.sector,
+          impact: r.finalScore > 0.70 ? "HIGH" : r.finalScore > 0.50 ? "MEDIUM" : "LOW",
+          sentiment: r.signal === "STRONG BUY" || r.signal === "BUY" ? "POSITIVE" : r.signal === "SELL" ? "NEGATIVE" : "NEUTRAL",
+          rallyRelevance: r.earlyRallySignal ? "RALLY CANDIDATE" : r.institutionalSignal ? "INSTITUTIONAL FLOW" : "WATCHLIST",
+          priceChange: r.priceChangePercent,
+          volumeSpike: r.volumeSpike,
+          aiScore: Math.round(r.finalScore * 100),
+          timestamp: new Date(Date.now() - i * 120000).toISOString(),
+          source: "AI Intelligence Engine",
+          credibilityScore: undefined,
+          verified: false,
+          type: 'stock',
+        }));
+
     const payload = {
       rankings: top50,
       earlyRallyCandidates,
       liveAlerts,
-      newsFeed: top50.slice(0, 20).map((r, i) => ({
-        symbol: r.symbol,
-        headline: `${r.symbol} (${r.sector}): ${r.signal} signal — score ${Math.round(r.finalScore * 100)}, vol spike ${r.volumeSpike.toFixed(1)}x, ${r.priceChangePercent >= 0 ? 'up' : 'down'} ${Math.abs(r.priceChangePercent).toFixed(2)}% today`,
-        sector: r.sector,
-        impact: r.finalScore > 0.70 ? "HIGH" : r.finalScore > 0.50 ? "MEDIUM" : "LOW",
-        sentiment: r.signal === "STRONG BUY" || r.signal === "BUY" ? "POSITIVE" : r.signal === "SELL" ? "NEGATIVE" : "NEUTRAL",
-        rallyRelevance: r.earlyRallySignal ? "RALLY CANDIDATE" : r.institutionalSignal ? "INSTITUTIONAL FLOW" : "WATCHLIST",
-        priceChange: r.priceChangePercent,
-        volumeSpike: r.volumeSpike,
-        aiScore: Math.round(r.finalScore * 100),
-        timestamp: new Date(Date.now() - i * 120000).toISOString(),
-        source: "AI Intelligence Engine",
-      })),
+      newsFeed: realNewsFeed,
       macroSnapshot: {
         repoRate:        { value: "6.50%", trend: "STABLE",  impact: "NEUTRAL" },
         inflation:       { value: "4.85%", trend: "FALLING", impact: "POSITIVE" },
@@ -3698,11 +3734,19 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
         `${r.symbol}|${r.sector}|score=${Math.round(r.finalScore * 100)}|signal=${r.signal}|chg=${r.priceChangePercent > 0 ? '+' : ''}${r.priceChangePercent.toFixed(2)}%|vol=${r.volumeSpike.toFixed(1)}x|rally=${r.earlyRallySignal}`
       ).join('\n');
 
+      // Include real news headlines if available
+      const realNewsContext = base.newsFeed && base.newsFeed.some((n: any) => n.credibilityScore !== undefined)
+        ? '\n\nReal news from Indian financial sources (use these as context):\n' +
+          base.newsFeed.slice(0, 10).map((n: any) =>
+            `[${n.source}${n.verified ? ' ✓' : ''}] ${n.headline} (sentiment: ${n.sentiment}, credibility: ${n.credibilityScore ?? 'N/A'})`
+          ).join('\n')
+        : '';
+
       const prompt = `You are a senior Indian equity market analyst and financial journalist. Today is ${today}.
 
 Analyze these top-ranked NSE/BSE stocks and generate individual stock-specific news that explains WHY each stock may rally or fall next:
 
-${topStocks}
+${topStocks}${realNewsContext}
 
 Respond with valid JSON only (no markdown):
 
@@ -3829,6 +3873,21 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
       res.json(dash.earlyRallyCandidates);
     } catch (err: any) {
       res.status(500).json({ error: "Failed to fetch rally candidates" });
+    }
+  });
+
+  app.get("/api/news/intelligence", async (req, res) => {
+    try {
+      const intel = await fetchNewsIntelligence();
+      res.json({
+        items: intel.items.slice(0, 50),
+        fetchedAt: intel.fetchedAt,
+        totalItems: intel.items.length,
+        sectorSentiment: getSectorSentiment(),
+      });
+    } catch (err: any) {
+      logError("news.intelligence.failed", err);
+      res.status(500).json({ error: "Failed to fetch news intelligence" });
     }
   });
 
