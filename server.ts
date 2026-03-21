@@ -1633,13 +1633,27 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] =>
     try {
       await upstoxService.handleOAuthCallback(String(code), getUpstoxCallbackUrl(req));
       logAction("upstox.callback.success", { code: "***" });
-      
+
+      // Retrieve the stored token so we can display it for Vercel env var update
+      const storedToken = await upstoxService.tokenManager.getValidAccessToken();
+      const isVercel = !!process.env.VERCEL;
+      const tokenHint = storedToken
+        ? `<div style="margin:20px 0;padding:16px;background:#1a1a2e;border-radius:8px;text-align:left;">
+            <p style="color:#aaa;font-size:12px;margin:0 0 8px">Access Token (copy this):</p>
+            <code style="color:#27ae60;word-break:break-all;font-size:11px">${storedToken}</code>
+           </div>
+           ${isVercel ? `<div style="margin:16px 0;padding:12px;background:#fff3cd;border-radius:8px;text-align:left;color:#856404;font-size:13px;">
+             <strong>⚠️ Vercel users:</strong> This token lives in memory only. To persist across cold starts, copy the token above and set <code>UPSTOX_ACCESS_TOKEN</code> in your <code>vercel.json</code> env block, then redeploy.
+           </div>` : ''}`
+        : '';
+
       res.send(`
         <html>
-          <body style="font-family: Arial; padding: 40px; text-align: center;">
-            <h2 style="color: #27ae60;">âœ… Authorization Successful!</h2>
+          <body style="font-family: Arial; padding: 40px; text-align: center; background:#0d0d1a; color:#fff;">
+            <h2 style="color: #27ae60;">✅ Authorization Successful!</h2>
             <p>Your Upstox account has been connected successfully.</p>
             <p>Tokens are stored securely and will auto-refresh daily.</p>
+            ${tokenHint}
             <a href="/" style="display: inline-block; margin-top: 20px; padding: 10px 20px; background: #3498db; color: white; text-decoration: none; border-radius: 5px;">Return to App</a>
           </body>
         </html>
@@ -1669,6 +1683,23 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] =>
       message: isAuthenticated 
         ? "Connected to Upstox. Tokens will auto-refresh daily." 
         : "Not connected. Please authenticate via OAuth."
+    });
+  }));
+
+  /**
+   * GET /api/upstox/token-status
+   * Debug endpoint — shows token seeding state (safe, no token value exposed)
+   */
+  app.get("/api/upstox/token-status", withErrorBoundary(async (req, res) => {
+    const token = await upstoxService.tokenManager.getValidAccessToken();
+    const envToken = process.env.UPSTOX_ACCESS_TOKEN;
+    res.json({
+      hasToken: !!token,
+      tokenLength: token ? token.length : 0,
+      seededFromEnv: !!envToken,
+      envTokenLength: envToken ? envToken.length : 0,
+      isVercel: !!process.env.VERCEL,
+      timestamp: new Date().toISOString()
     });
   }));
 
@@ -2459,6 +2490,36 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
       }
     });
   });
+
+  app.get("/api/market/indices", withErrorBoundary(async (req, res) => {
+    // Fetch NIFTY 50 and SENSEX index quotes from Upstox when connected
+    const isAuth = await upstoxService.isAuthenticated();
+    if (isAuth) {
+      try {
+        const indexKeys = ['NSE_INDEX|Nifty 50', 'NSE_INDEX|Nifty Bank'];
+        const response = await upstoxService.apiClient.fetchMarketQuotes(indexKeys);
+        const indices: Array<{ s: string; v: string; c: string }> = [];
+        if (response?.data) {
+          for (const [key, val] of Object.entries(response.data as Record<string, any>)) {
+            const ohlc = val.ohlc || {};
+            const ltp: number = val.last_price || ohlc.close || 0;
+            const prev: number = ohlc.close || ltp;
+            const chg = prev > 0 ? ((ltp - prev) / prev) * 100 : 0;
+            const label = key.includes('Bank') ? 'BANK NIFTY' : 'NIFTY 50';
+            indices.push({ s: label, v: ltp.toFixed(2), c: (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' });
+          }
+        }
+        if (indices.length > 0) return res.json(indices);
+      } catch { /* fall through to simulated */ }
+    }
+    // Simulated index data (deterministic, changes slowly)
+    const seed = Math.floor(Date.now() / 300000); // changes every 5 min
+    const r = (base: number, range: number) => base + (Math.sin(seed) * range);
+    res.json([
+      { s: 'NIFTY 50',   v: r(22453, 120).toFixed(2), c: (Math.sin(seed) * 0.8 >= 0 ? '+' : '') + (Math.sin(seed) * 0.8).toFixed(2) + '%' },
+      { s: 'BANK NIFTY', v: r(48200, 300).toFixed(2), c: (Math.cos(seed) * 0.9 >= 0 ? '+' : '') + (Math.cos(seed) * 0.9).toFixed(2) + '%' },
+    ]);
+  }));
 
   app.get("/api/quant/sentiment", (req, res) => {
     // Market Sentiment Engine

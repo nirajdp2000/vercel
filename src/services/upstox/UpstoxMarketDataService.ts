@@ -250,50 +250,47 @@ export class UpstoxMarketDataService {
    * Map symbol to Upstox instrument key
    */
   private symbolToInstrumentKey(symbol: string): string {
-    const mapping: Record<string, string> = {
-      'RELIANCE': 'NSE_EQ|INE002A01018',
-      'TCS': 'NSE_EQ|INE467B01029',
-      'HDFCBANK': 'NSE_EQ|INE040A01034',
-      'INFY': 'NSE_EQ|INE009A01021',
-      'ICICIBANK': 'NSE_EQ|INE090A01021',
-      'SBIN': 'NSE_EQ|INE062A01020',
-      'BHARTIARTL': 'NSE_EQ|INE397D01024',
-      'LT': 'NSE_EQ|INE018A01030',
-      'ITC': 'NSE_EQ|INE154A01025',
-      'KOTAKBANK': 'NSE_EQ|INE237A01028',
-      'AXISBANK': 'NSE_EQ|INE238A01034',
-      'ADANIENT': 'NSE_EQ|INE423A01024',
-      'ASIANPAINT': 'NSE_EQ|INE021A01026',
-      'MARUTI': 'NSE_EQ|INE585B01010',
-      'SUNPHARMA': 'NSE_EQ|INE044A01036',
-      'TITAN': 'NSE_EQ|INE280A01028',
-      'BAJFINANCE': 'NSE_EQ|INE296A01024',
-      'HCLTECH': 'NSE_EQ|INE860A01027',
-      'WIPRO': 'NSE_EQ|INE075A01022',
-      'TATAMOTORS': 'NSE_EQ|INE155A01022',
-    };
-    
-    return mapping[symbol] || `NSE_EQ|${symbol}`;
+    return this.symbolToInstrumentKeyMap()[symbol] || `NSE_EQ|${symbol}`;
   }
 
   /**
-   * Parse Upstox quote response to MarketQuote format
+   * Parse Upstox quote response to MarketQuote format.
+   * Upstox returns response keys as "NSE_EQ:RELIANCE" (colon-separated with symbol name)
+   * but we send requests as "NSE_EQ|INE002A01018" (pipe-separated with ISIN).
+   * We build a reverse ISIN→symbol map to correctly resolve symbols.
    */
   private parseUpstoxQuotes(response: any): MarketQuote[] {
     const quotes: MarketQuote[] = [];
-    
-    if (!response.data) return quotes;
-    
-    for (const [key, value] of Object.entries(response.data)) {
+    if (!response?.data) return quotes;
+
+    const map = this.symbolToInstrumentKeyMap();
+    // Build reverse lookup: ISIN → symbol  AND  "NSE_EQ:SYMBOL" → symbol
+    const isinToSymbol = new Map<string, string>();
+    for (const [sym, key] of Object.entries(map)) {
+      const isin = key.split('|')[1] || '';
+      if (isin) isinToSymbol.set(isin, sym);
+      // Upstox response key format: "NSE_EQ:RELIANCE"
+      isinToSymbol.set(`NSE_EQ:${sym}`, sym);
+      isinToSymbol.set(`BSE_EQ:${sym}`, sym);
+    }
+
+    for (const [responseKey, value] of Object.entries(response.data)) {
       const data = value as any;
       const ohlc = data.ohlc || {};
       const lastPrice = data.last_price || ohlc.close || 0;
       const previousClose = ohlc.close || lastPrice;
       const change = lastPrice - previousClose;
       const changePercent = previousClose > 0 ? (change / previousClose) * 100 : 0;
-      
+
+      // Try: direct map lookup, then ISIN from key, then symbol name from key
+      const isin = responseKey.split(/[|:]/).pop() || '';
+      const symbol = isinToSymbol.get(responseKey)
+        || isinToSymbol.get(isin)
+        || data.instrument_token?.toString()
+        || isin;
+
       quotes.push({
-        symbol: this.extractSymbolFromKey(key),
+        symbol,
         lastPrice,
         change,
         changePercent,
@@ -304,22 +301,38 @@ export class UpstoxMarketDataService {
         previousClose
       });
     }
-    
     return quotes;
   }
 
   /**
-   * Extract symbol from instrument key
+   * Full symbol → instrument key map (single source of truth)
    */
-  private extractSymbolFromKey(key: string): string {
-    // Extract from "NSE_EQ|INE002A01018" format
-    const parts = key.split('|');
-    return parts[0] || key;
+  private symbolToInstrumentKeyMap(): Record<string, string> {
+    return {
+      'RELIANCE':   'NSE_EQ|INE002A01018',
+      'TCS':        'NSE_EQ|INE467B01029',
+      'HDFCBANK':   'NSE_EQ|INE040A01034',
+      'INFY':       'NSE_EQ|INE009A01021',
+      'ICICIBANK':  'NSE_EQ|INE090A01021',
+      'SBIN':       'NSE_EQ|INE062A01020',
+      'BHARTIARTL': 'NSE_EQ|INE397D01024',
+      'LT':         'NSE_EQ|INE018A01030',
+      'ITC':        'NSE_EQ|INE154A01025',
+      'KOTAKBANK':  'NSE_EQ|INE237A01028',
+      'AXISBANK':   'NSE_EQ|INE238A01034',
+      'ADANIENT':   'NSE_EQ|INE423A01024',
+      'ASIANPAINT': 'NSE_EQ|INE021A01026',
+      'MARUTI':     'NSE_EQ|INE585B01010',
+      'SUNPHARMA':  'NSE_EQ|INE044A01036',
+      'TITAN':      'NSE_EQ|INE280A01028',
+      'BAJFINANCE': 'NSE_EQ|INE296A01024',
+      'HCLTECH':    'NSE_EQ|INE860A01027',
+      'WIPRO':      'NSE_EQ|INE075A01022',
+      'TATAMOTORS': 'NSE_EQ|INE155A01022',
+      'NESTLEIND':  'NSE_EQ|INE239A01016',
+    };
   }
 
-  /**
-   * Get popular symbols for scanning
-   */
   private getPopularSymbols(): string[] {
     return [
       'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK',
@@ -328,17 +341,14 @@ export class UpstoxMarketDataService {
     ];
   }
 
-  /**
-   * Get sector to symbols mapping
-   */
   private getSectorMapping(): Record<string, string[]> {
     return {
-      'IT': ['TCS', 'INFY', 'HCLTECH', 'WIPRO'],
-      'Banking': ['HDFCBANK', 'ICICIBANK', 'SBIN', 'KOTAKBANK', 'AXISBANK'],
-      'Auto': ['MARUTI', 'TATAMOTORS'],
-      'Pharma': ['SUNPHARMA'],
-      'Industrials': ['LT', 'ADANIENT'],
-      'Consumer': ['ITC', 'TITAN', 'ASIANPAINT', 'NESTLEIND']
+      'IT':         ['TCS', 'INFY', 'HCLTECH', 'WIPRO'],
+      'Banking':    ['HDFCBANK', 'ICICIBANK', 'SBIN', 'KOTAKBANK', 'AXISBANK'],
+      'Auto':       ['MARUTI', 'TATAMOTORS'],
+      'Pharma':     ['SUNPHARMA'],
+      'Industrials':['LT', 'ADANIENT'],
+      'Consumer':   ['ITC', 'TITAN', 'ASIANPAINT', 'NESTLEIND']
     };
   }
 

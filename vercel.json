@@ -20,6 +20,7 @@
     "UPSTOX_CLIENT_SECRET": "ilm324qk8m",
     "UPSTOX_REDIRECT_URI": "https://nirajstock.vercel.app/api/upstox/callback",
     "GEMINI_API_KEY": "AIzaSyD1DHKMhttOMNxDKUF2VFFKiOM76GpTnbw",
-    "API_KEY": "AIzaSyD1DHKMhttOMNxDKUF2VFFKiOM76GpTnbw"
+    "API_KEY": "AIzaSyD1DHKMhttOMNxDKUF2VFFKiOM76GpTnbw",
+    "UPSTOX_ACCESS_TOKEN": ""
   }
 }

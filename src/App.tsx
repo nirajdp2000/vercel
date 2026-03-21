@@ -196,6 +196,12 @@ export default function App() {
   const [mdMomentum, setMdMomentum] = useState<any[]>([]);
   const [mdFlash, setMdFlash] = useState(false);
 
+  // Market ticker items (indices + top movers)
+  const [tickerItems, setTickerItems] = useState<Array<{ s: string; v: string; c: string }>>([
+    { s: 'NIFTY 50', v: '—', c: '—' },
+    { s: 'BANK NIFTY', v: '—', c: '—' },
+  ]);
+
   // Watchlist
   const [watchlist, setWatchlist] = useState<Array<{symbol: string; name: string; key: string}>>([]);
   const addToWatchlist = (s: {symbol: string; name: string; key: string}) => {
@@ -248,17 +254,30 @@ export default function App() {
   useEffect(() => {
     const fetchMD = async () => {
       try {
-        const [sectors, sentiment, momentum] = await Promise.all([
+        const [sectors, sentiment, momentum, indices] = await Promise.all([
           fetch('/api/quant/sectors').then(r => r.json()),
           fetch('/api/quant/sentiment').then(r => r.json()),
           fetch('/api/quant/momentum').then(r => r.json()),
+          fetch('/api/market/indices').then(r => r.json()),
         ]);
         setMdSectors(Array.isArray(sectors) ? sectors : []);
         setMdSentiment(sentiment);
-        setMdMomentum(Array.isArray(momentum) ? momentum.slice(0, 5) : []);
+        const momentumArr = Array.isArray(momentum) ? momentum.slice(0, 5) : [];
+        setMdMomentum(momentumArr);
         setMdLastUpdated(new Date().toLocaleTimeString());
         setMdFlash(true);
         setTimeout(() => setMdFlash(false), 400);
+
+        // Build ticker: indices first, then top movers
+        const movers = momentumArr.slice(0, 4).map((m: any) => ({
+          s: m.symbol,
+          v: m.lastPrice ? m.lastPrice.toFixed(2) : '—',
+          c: m.priceChange !== undefined
+            ? (parseFloat(m.priceChange) >= 0 ? '+' : '') + parseFloat(m.priceChange).toFixed(2) + '%'
+            : '—',
+        }));
+        const idxItems = Array.isArray(indices) ? indices : [];
+        setTickerItems([...idxItems, ...movers]);
       } catch { /* silent — show stale data */ }
     };
     fetchMD();
@@ -754,33 +773,19 @@ export default function App() {
       {/* Market Ticker */}
       <div className="bg-indigo-600/10 border-b border-white/5 py-1.5 overflow-hidden whitespace-nowrap">
         <div className="flex animate-marquee gap-12 items-center">
-          {[
-            { s: "NIFTY 50", v: "22,453.20", c: "+0.45%" },
-            { s: "SENSEX", v: "73,876.12", c: "+0.38%" },
-            { s: "RELIANCE", v: "2,987.45", c: "-0.12%" },
-            { s: "TCS", v: "4,120.30", c: "+1.20%" },
-            { s: "HDFCBANK", v: "1,450.15", c: "+0.85%" },
-            { s: "INFY", v: "1,620.45", c: "-0.45%" },
-          ].map((item, i) => (
+          {tickerItems.map((item, i) => (
             <div key={i} className="flex items-center gap-2 text-[10px] font-bold tracking-wider">
               <span className="text-zinc-400">{item.s}</span>
               <span className="text-white">{item.v}</span>
-              <span className={item.c.startsWith('+') ? "text-emerald-400" : "text-rose-400"}>{item.c}</span>
+              <span className={item.c.startsWith('+') ? "text-emerald-400" : item.c.startsWith('-') ? "text-rose-400" : "text-zinc-500"}>{item.c}</span>
             </div>
           ))}
           {/* Duplicate for seamless loop */}
-          {[
-            { s: "NIFTY 50", v: "22,453.20", c: "+0.45%" },
-            { s: "SENSEX", v: "73,876.12", c: "+0.38%" },
-            { s: "RELIANCE", v: "2,987.45", c: "-0.12%" },
-            { s: "TCS", v: "4,120.30", c: "+1.20%" },
-            { s: "HDFCBANK", v: "1,450.15", c: "+0.85%" },
-            { s: "INFY", v: "1,620.45", c: "-0.45%" },
-          ].map((item, i) => (
+          {tickerItems.map((item, i) => (
             <div key={`dup-${i}`} className="flex items-center gap-2 text-[10px] font-bold tracking-wider">
               <span className="text-zinc-400">{item.s}</span>
               <span className="text-white">{item.v}</span>
-              <span className={item.c.startsWith('+') ? "text-emerald-400" : "text-rose-400"}>{item.c}</span>
+              <span className={item.c.startsWith('+') ? "text-emerald-400" : item.c.startsWith('-') ? "text-rose-400" : "text-zinc-500"}>{item.c}</span>
             </div>
           ))}
         </div>
