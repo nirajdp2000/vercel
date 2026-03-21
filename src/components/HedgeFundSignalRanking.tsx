@@ -129,28 +129,28 @@ export function HedgeFundSignalRanking({ dashboard }: { dashboard?: HedgeFundSig
         </div>
       </div>
 
-      <div className="mt-8 grid grid-cols-1 gap-6 xl:grid-cols-[1.35fr_0.95fr]">
-        <div className="rounded-[1.75rem] border border-white/5 bg-zinc-950/75 shadow-2xl shadow-black/20">
-          <div className="flex items-center justify-between border-b border-white/5 px-6 py-5">
-            <h4 className="flex items-center gap-2 text-sm font-black uppercase tracking-[0.2em] text-white">
+      <div className="mt-8 grid grid-cols-1 gap-6 xl:grid-cols-[1.6fr_0.8fr]">
+        <div className="rounded-[1.75rem] border border-white/5 bg-zinc-950/75 shadow-2xl shadow-black/20 min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between border-b border-white/5 px-5 py-4">
+            <h4 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-white">
               <TrendingUp className="h-4 w-4 text-emerald-300" />
               Top 100 Stocks
             </h4>
-            <span className="text-[11px] font-bold uppercase tracking-[0.2em] text-zinc-500">Click a row for factor detail</span>
+            <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-zinc-500 hidden sm:block">Click row for detail</span>
           </div>
 
           <div className="max-h-[34rem] overflow-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="sticky top-0 bg-zinc-950/95 text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500">
+            <table className="w-full min-w-[560px] text-left text-sm">
+              <thead className="sticky top-0 bg-zinc-950/95 text-[9px] font-bold uppercase tracking-[0.15em] text-zinc-500">
                 <tr>
-                  <th className="px-4 py-4">Rank</th>
-                  <th className="px-4 py-4">Stock</th>
-                  <th className="px-4 py-4">Momentum</th>
-                  <th className="px-4 py-4">Trend</th>
-                  <th className="px-4 py-4">Volume</th>
-                  <th className="px-4 py-4">Sector</th>
-                  <th className="px-4 py-4">Breakout</th>
-                  <th className="px-4 py-4">Final</th>
+                  <th className="px-3 py-3 w-10">#</th>
+                  <th className="px-3 py-3">Stock</th>
+                  <th className="px-2 py-3 text-right">Mom</th>
+                  <th className="px-2 py-3 text-right">Trend</th>
+                  <th className="px-2 py-3 text-right">Vol</th>
+                  <th className="px-2 py-3 text-right">Sector</th>
+                  <th className="px-2 py-3 text-right">BrkOut</th>
+                  <th className="px-3 py-3 text-right">Final</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
@@ -160,19 +160,19 @@ export function HedgeFundSignalRanking({ dashboard }: { dashboard?: HedgeFundSig
                     <tr
                       key={signal.stockSymbol}
                       onClick={() => setSelectedSymbol(signal.stockSymbol)}
-                      className={isSelected ? 'bg-emerald-400/[0.08]' : 'hover:bg-white/[0.03]'}
+                      className={`cursor-pointer transition-colors ${isSelected ? 'bg-emerald-400/[0.08]' : 'hover:bg-white/[0.03]'}`}
                     >
-                      <td className="px-4 py-4 font-black text-zinc-400">#{signal.rank}</td>
-                      <td className="px-4 py-4">
-                        <div className="font-bold text-white">{cleanSymbol(signal.stockSymbol)}</div>
-                        <div className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{signal.sector}</div>
+                      <td className="px-3 py-2.5 font-black text-zinc-500 text-[11px]">#{signal.rank}</td>
+                      <td className="px-3 py-2.5">
+                        <div className="text-[12px] font-bold text-white leading-tight">{cleanSymbol(signal.stockSymbol)}</div>
+                        <div className="text-[9px] uppercase tracking-[0.15em] text-zinc-500 mt-0.5">{signal.sector}</div>
                       </td>
-                      <td className={`px-4 py-4 font-bold ${scoreTone(signal.momentumScore)}`}>{signal.momentumScore.toFixed(1)}</td>
-                      <td className={`px-4 py-4 font-bold ${scoreTone(signal.trendScore)}`}>{signal.trendScore.toFixed(1)}</td>
-                      <td className={`px-4 py-4 font-bold ${scoreTone(signal.volumeScore)}`}>{signal.volumeScore.toFixed(1)}</td>
-                      <td className={`px-4 py-4 font-bold ${scoreTone(signal.sectorScore)}`}>{signal.sectorScore.toFixed(1)}</td>
-                      <td className={`px-4 py-4 font-bold ${scoreTone(signal.breakoutScore)}`}>{signal.breakoutScore.toFixed(1)}</td>
-                      <td className="px-4 py-4 text-base font-black text-emerald-300">{signal.finalScore.toFixed(1)}</td>
+                      <td className={`px-2 py-2.5 text-[11px] font-bold text-right ${scoreTone(signal.momentumScore)}`}>{signal.momentumScore.toFixed(1)}</td>
+                      <td className={`px-2 py-2.5 text-[11px] font-bold text-right ${scoreTone(signal.trendScore)}`}>{signal.trendScore.toFixed(1)}</td>
+                      <td className={`px-2 py-2.5 text-[11px] font-bold text-right ${scoreTone(signal.volumeScore)}`}>{signal.volumeScore.toFixed(1)}</td>
+                      <td className={`px-2 py-2.5 text-[11px] font-bold text-right ${scoreTone(signal.sectorScore)}`}>{signal.sectorScore.toFixed(1)}</td>
+                      <td className={`px-2 py-2.5 text-[11px] font-bold text-right ${scoreTone(signal.breakoutScore)}`}>{signal.breakoutScore.toFixed(1)}</td>
+                      <td className="px-3 py-2.5 text-[13px] font-black text-right text-emerald-300">{signal.finalScore.toFixed(1)}</td>
                     </tr>
                   );
                 })}
