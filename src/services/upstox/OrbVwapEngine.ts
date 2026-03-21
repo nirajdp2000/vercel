@@ -427,9 +427,9 @@ export class OrbVwapEngine {
       .sort((a, b) => b.confidence - a.confidence);
   }
 
-  /** Synthetic fallback when Upstox is unavailable */
+  /** Synthetic fallback when Upstox is unavailable — returns empty so caller uses its own synthetic path */
   private getSyntheticSignals(): EarlyRallySignal[] {
-    // Return empty — caller will use the existing seeded-data path
+    // Return empty array — buildAIIntelligenceDashboard handles synthetic rally detection itself
     return [];
   }
 

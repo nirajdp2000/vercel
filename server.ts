@@ -3505,9 +3505,10 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
 
       // Real ORB signal overrides synthetic when available
       const orbData = orbSignalMap.get(profile.symbol);
+      // Synthetic thresholds: priceAccel > 0.8% OR volSpike > 1.5x (realistic for seeded data)
       const earlyRallySignal = orbData
         ? orbData.signal === 'EARLY_RALLY'
-        : priceAccel > 1.2 && volSpike > 1.8;
+        : (priceAccel > 0.8 && volSpike > 1.3) || (priceAccel > 1.5) || (volSpike > 2.0);
 
       const recentStd = stdDev(closes.slice(-5));
       const longerStd = stdDev(closes.slice(-20));
@@ -3675,7 +3676,16 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
       .map((r, i) => ({ ...r, rank: i + 1 }));
 
     const top50 = ranked.slice(0, 50);
-    const earlyRallyCandidates = ranked.filter(r => r.earlyRallySignal).slice(0, 15);
+
+    // earlyRallyCandidates: prefer real ORB signals, fall back to top rallyScore stocks
+    const orbCandidates = ranked.filter(r => r.earlyRallySignal);
+    const earlyRallyCandidates = (
+      orbCandidates.length >= 5
+        ? orbCandidates
+        : ranked.slice().sort((a, b) => b.rallyProbabilityScore - a.rallyProbabilityScore)
+    )
+      .sort((a, b) => b.rallyProbabilityScore - a.rallyProbabilityScore)
+      .slice(0, 15);
     const liveAlerts = ranked.slice(0, 30)
       .flatMap(r => r.alerts)
       .sort((a: any, b: any) => b.confidenceScore - a.confidenceScore)
@@ -3751,7 +3761,7 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
       summary: {
         totalScanned: ranked.length,
         bullishCount: bullish,
-        earlyRallyCount: earlyRallyCandidates.length,
+        earlyRallyCount: orbCandidates.length,
         highConfidenceCount: highConf,
         averageFinalScore: +avgScore.toFixed(2),
         marketBias: avgScore > 0.60 ? "BULLISH" : avgScore > 0.45 ? "NEUTRAL" : "BEARISH",
