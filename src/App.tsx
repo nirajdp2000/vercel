@@ -956,7 +956,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-[1600px] mx-auto px-3 py-4">
+      <main className="max-w-[1600px] mx-auto px-3 py-4 overflow-x-hidden">
         {isUltraQuantTab ? (
           <UltraQuantTab />
         ) : isMultibaggerTab ? (

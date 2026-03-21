@@ -313,7 +313,7 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
       : <ChevronDown size={9} className="opacity-20 inline ml-0.5" />;
 
   return (
-    <div className="rounded-[2rem] border border-white/5 bg-zinc-950/70 shadow-2xl shadow-black/30">
+    <div className="rounded-[2rem] border border-white/5 bg-zinc-950/70 shadow-2xl shadow-black/30 min-w-0 overflow-hidden">
       {/* Header */}
       <div className="border-b border-white/5 px-5 py-4 space-y-3">
         <div className="flex items-center justify-between gap-3">
@@ -341,8 +341,8 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
         </div>
       </div>
 
-      <div className="max-h-[44rem] overflow-auto">
-        <table className="w-full text-left">
+      <div className="overflow-x-auto max-h-[44rem] overflow-y-auto">
+        <table className="w-full min-w-[640px] text-left">
           <thead className="sticky top-0 bg-zinc-950/98 text-[9px] font-bold uppercase tracking-[0.18em] text-zinc-500 border-b border-white/5">
             <tr>
               <th className="px-5 py-3">Stock</th>
@@ -378,7 +378,7 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
                     </div>
                   </td>
                   {/* Score with bar */}
-                  <td className="px-3 py-3 min-w-[80px]">
+                  <td className="px-3 py-3 w-20">
                     <div className="space-y-1.5">
                       <span className="text-[11px] font-black text-cyan-300">{stock.score.toFixed(1)}</span>
                       <ScoreBar value={stock.score} color="bg-cyan-400" />
@@ -388,7 +388,7 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
                     {stock.cagr.toFixed(1)}%
                   </td>
                   <td className="px-3 py-3 text-[11px] text-zinc-300 font-bold">{stock.momentum.toFixed(2)}x</td>
-                  <td className="px-3 py-3 min-w-[80px]">
+                  <td className="px-3 py-3 w-20">
                     <div className="space-y-1.5">
                       <span className="text-[11px] font-black text-emerald-400">{stock.finalPredictionScore.toFixed(1)}%</span>
                       <ScoreBar value={stock.finalPredictionScore} color="bg-emerald-400" />
@@ -634,11 +634,13 @@ const UltraQuantTab = () => {
 
       {/* Main content grid */}
       {!loading && results.length > 0 && (
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_320px]">
-          <StockTable results={results} />
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_300px] min-w-0 overflow-hidden">
+          <div className="min-w-0 overflow-hidden">
+            <StockTable results={results} />
+          </div>
 
           {/* Right sidebar */}
-          <div className="space-y-5">
+          <div className="space-y-5 min-w-0">
             {/* Sector rotation */}
             <div className="rounded-[2rem] border border-white/5 bg-zinc-950/70 p-5 shadow-2xl shadow-black/30">
               <h3 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-white mb-4">

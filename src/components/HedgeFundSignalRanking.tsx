@@ -93,7 +93,7 @@ export function HedgeFundSignalRanking({ dashboard }: { dashboard?: HedgeFundSig
   const selectedSignal = rankings.find((signal) => signal.stockSymbol === selectedSymbol) ?? rankings[0];
 
   return (
-    <section className="rounded-[2rem] border border-emerald-500/10 bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.15),_transparent_28%),linear-gradient(180deg,rgba(5,11,17,0.96),rgba(8,12,18,0.96))] p-7 shadow-2xl shadow-black/30">
+    <section className="rounded-[2rem] border border-emerald-500/10 bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.15),_transparent_28%),linear-gradient(180deg,rgba(5,11,17,0.96),rgba(8,12,18,0.96))] p-7 shadow-2xl shadow-black/30 overflow-hidden">
       <div className="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
         <div className="max-w-3xl">
           <p className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.3em] text-emerald-300">
@@ -181,7 +181,7 @@ export function HedgeFundSignalRanking({ dashboard }: { dashboard?: HedgeFundSig
           </div>
         </div>
 
-        <div className="space-y-6">
+        <div className="space-y-6 min-w-0">
           <div className="rounded-[1.75rem] border border-white/5 bg-zinc-950/75 p-6 shadow-2xl shadow-black/20">
             <h4 className="flex items-center gap-2 text-sm font-black uppercase tracking-[0.2em] text-white">
               <Radar className="h-4 w-4 text-cyan-300" />
