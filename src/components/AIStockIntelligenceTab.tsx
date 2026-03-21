@@ -46,6 +46,17 @@ interface StockIntelligenceResult {
   alerts: StockAlert[];
   signal: string;
   confidence: string;
+  // ORB/VWAP fields (present when live Upstox data available)
+  orbHigh?: number;
+  orbLow?: number;
+  orbBreakoutPct?: number;
+  vwap?: number;
+  priceAboveVwap?: boolean;
+  priceAboveOrb?: boolean;
+  rsi?: number;
+  volumeSpikeConfirmed?: boolean;
+  orbSignal?: 'EARLY_RALLY' | 'WATCH' | 'NONE';
+  dataSource?: 'live' | 'synthetic';
 }
 
 interface NewsItem {
@@ -472,70 +483,128 @@ function EarlyRallyPanel({ candidates }: { candidates: StockIntelligenceResult[]
       <div className="flex flex-col items-center justify-center gap-3 py-16 text-white/30">
         <Zap size={32} className="opacity-20" />
         <p className="text-sm font-bold">No early rally signals detected right now</p>
-        <p className="text-[11px]">The engine scans for price acceleration + volume spikes every 60s</p>
+        <p className="text-[11px]">The engine scans ORB + VWAP + Volume every 60s during market hours</p>
       </div>
     );
   }
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-      {candidates.map(c => (
-        <div key={c.symbol} className="group rounded-2xl border border-amber-500/20 bg-gradient-to-br from-amber-500/5 to-transparent p-4 space-y-3 hover:border-amber-500/40 transition-all">
-          <div className="flex items-start justify-between">
-            <div>
+      {candidates.map(c => {
+        const isLive = c.dataSource === 'live';
+        return (
+          <div key={c.symbol} className={`group rounded-2xl border p-4 space-y-3 transition-all hover:border-amber-500/40 ${
+            isLive ? 'border-amber-500/30 bg-gradient-to-br from-amber-500/8 to-transparent'
+                   : 'border-amber-500/20 bg-gradient-to-br from-amber-500/5 to-transparent'
+          }`}>
+            {/* Header */}
+            <div className="flex items-start justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Zap size={13} className="text-amber-400" />
+                  <span className="font-black text-white text-sm">{c.symbol}</span>
+                  {c.institutionalSignal && <Shield size={11} className="text-violet-400" />}
+                  {isLive && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 border border-emerald-500/25 px-1.5 py-0.5 text-[7px] font-black text-emerald-400 uppercase tracking-[0.1em]">
+                      ● LIVE
+                    </span>
+                  )}
+                </div>
+                <p className="text-[9px] text-white/30 mt-0.5 uppercase tracking-[0.15em]">{c.sector} — {c.marketRegime}</p>
+              </div>
+              <SignalBadge signal={c.signal} large />
+            </div>
+
+            {/* ORB/VWAP block — shown when live data available */}
+            {isLive && c.orbHigh !== undefined && (
+              <div className="grid grid-cols-3 gap-1.5 rounded-xl bg-white/[0.03] border border-white/5 p-2.5">
+                <div className="text-center">
+                  <p className="text-[7px] text-white/30 uppercase tracking-[0.1em] mb-0.5">ORB High</p>
+                  <p className="text-[11px] font-black text-amber-400">₹{c.orbHigh.toFixed(1)}</p>
+                </div>
+                <div className="text-center border-x border-white/5">
+                  <p className="text-[7px] text-white/30 uppercase tracking-[0.1em] mb-0.5">VWAP</p>
+                  <p className={`text-[11px] font-black ${c.priceAboveVwap ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    ₹{c.vwap?.toFixed(1)}
+                  </p>
+                </div>
+                <div className="text-center">
+                  <p className="text-[7px] text-white/30 uppercase tracking-[0.1em] mb-0.5">Breakout</p>
+                  <p className={`text-[11px] font-black ${(c.orbBreakoutPct ?? 0) > 0 ? 'text-emerald-400' : 'text-white/40'}`}>
+                    {(c.orbBreakoutPct ?? 0) > 0 ? `+${c.orbBreakoutPct?.toFixed(2)}%` : '—'}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Condition badges — live only */}
+            {isLive && (
+              <div className="flex flex-wrap gap-1">
+                <span className={`rounded px-1.5 py-0.5 text-[7px] font-black uppercase ${c.priceAboveOrb ? 'bg-emerald-500/15 text-emerald-400' : 'bg-white/5 text-white/20'}`}>
+                  {c.priceAboveOrb ? '✓' : '✗'} ORB Break
+                </span>
+                <span className={`rounded px-1.5 py-0.5 text-[7px] font-black uppercase ${c.priceAboveVwap ? 'bg-emerald-500/15 text-emerald-400' : 'bg-white/5 text-white/20'}`}>
+                  {c.priceAboveVwap ? '✓' : '✗'} Above VWAP
+                </span>
+                <span className={`rounded px-1.5 py-0.5 text-[7px] font-black uppercase ${c.volumeSpikeConfirmed ? 'bg-amber-500/15 text-amber-400' : 'bg-white/5 text-white/20'}`}>
+                  {c.volumeSpikeConfirmed ? '✓' : '✗'} Vol Spike
+                </span>
+                {c.rsi !== undefined && (
+                  <span className={`rounded px-1.5 py-0.5 text-[7px] font-black uppercase ${c.rsi > 55 ? 'bg-cyan-500/15 text-cyan-400' : 'bg-white/5 text-white/20'}`}>
+                    RSI {c.rsi.toFixed(0)}
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* Score ring + stats */}
+            <div className="flex items-center gap-4">
+              <div className="relative flex items-center justify-center w-14 h-14 shrink-0">
+                <ScoreRing value={c.rallyProbabilityScore} size={56} stroke={4} color="#f59e0b" />
+                <div className="absolute text-center">
+                  <p className="text-[13px] font-black text-amber-400 leading-none">{s100(c.rallyProbabilityScore)}</p>
+                  <p className="text-[7px] text-white/30 uppercase">Conf</p>
+                </div>
+              </div>
+              <div className="flex-1 grid grid-cols-2 gap-x-4 gap-y-2 text-[10px]">
+                <div>
+                  <p className="text-white/30 uppercase tracking-[0.12em]">{isLive ? 'Vol Spike' : 'Accel'}</p>
+                  <p className="font-black text-amber-400">
+                    {isLive ? `${c.volumeSpike.toFixed(1)}x` : pct(c.priceAcceleration)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-white/30 uppercase tracking-[0.12em]">Price</p>
+                  <p className={`font-black ${c.priceChangePercent >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {pct(c.priceChangePercent)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-white/30 uppercase tracking-[0.12em]">AI Score</p>
+                  <p className="font-black text-cyan-400">{s100(c.aiPredictionScore)}</p>
+                </div>
+                <div>
+                  <p className="text-white/30 uppercase tracking-[0.12em]">Inst.</p>
+                  <p className="font-black text-violet-400">{s100(c.institutionalScore)}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Score bars */}
+            <div className="space-y-1.5">
               <div className="flex items-center gap-2">
-                <Zap size={13} className="text-amber-400" />
-                <span className="font-black text-white text-sm">{c.symbol}</span>
-                {c.institutionalSignal && <Shield size={11} className="text-violet-400" />}
+                <span className="w-12 text-[9px] text-white/30">Quant</span>
+                <ScoreBar value={c.quantFilterScore} color="blue" thin />
+                <span className="text-[9px] text-blue-400 w-5 text-right">{s100(c.quantFilterScore)}</span>
               </div>
-              <p className="text-[9px] text-white/30 mt-0.5 uppercase tracking-[0.15em]">{c.sector} — {c.marketRegime}</p>
-            </div>
-            <SignalBadge signal={c.signal} large />
-          </div>
-
-          {/* Score ring + stats */}
-          <div className="flex items-center gap-4">
-            <div className="relative flex items-center justify-center w-14 h-14 shrink-0">
-              <ScoreRing value={c.rallyProbabilityScore} size={56} stroke={4} color="#f59e0b" />
-              <div className="absolute text-center">
-                <p className="text-[13px] font-black text-amber-400 leading-none">{s100(c.rallyProbabilityScore)}</p>
-                <p className="text-[7px] text-white/30 uppercase">Rally</p>
-              </div>
-            </div>
-            <div className="flex-1 grid grid-cols-2 gap-x-4 gap-y-2 text-[10px]">
-              <div>
-                <p className="text-white/30 uppercase tracking-[0.12em]">Accel</p>
-                <p className="font-black text-amber-400">{pct(c.priceAcceleration)}</p>
-              </div>
-              <div>
-                <p className="text-white/30 uppercase tracking-[0.12em]">Vol Spike</p>
-                <p className="font-black text-amber-400">{c.volumeSpike.toFixed(1)}x</p>
-              </div>
-              <div>
-                <p className="text-white/30 uppercase tracking-[0.12em]">AI Score</p>
-                <p className="font-black text-cyan-400">{s100(c.aiPredictionScore)}</p>
-              </div>
-              <div>
-                <p className="text-white/30 uppercase tracking-[0.12em]">Inst. Score</p>
-                <p className="font-black text-violet-400">{s100(c.institutionalScore)}</p>
+              <div className="flex items-center gap-2">
+                <span className="w-12 text-[9px] text-white/30">Macro</span>
+                <ScoreBar value={c.macroScore} color="indigo" thin />
+                <span className="text-[9px] text-indigo-400 w-5 text-right">{s100(c.macroScore)}</span>
               </div>
             </div>
           </div>
-
-          {/* Score bars */}
-          <div className="space-y-1.5">
-            <div className="flex items-center gap-2">
-              <span className="w-12 text-[9px] text-white/30">Quant</span>
-              <ScoreBar value={c.quantFilterScore} color="blue" thin />
-              <span className="text-[9px] text-blue-400 w-5 text-right">{s100(c.quantFilterScore)}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="w-12 text-[9px] text-white/30">Macro</span>
-              <ScoreBar value={c.macroScore} color="indigo" thin />
-              <span className="text-[9px] text-indigo-400 w-5 text-right">{s100(c.macroScore)}</span>
-            </div>
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

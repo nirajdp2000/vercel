@@ -13,6 +13,7 @@ import {
 } from "./serverLogger";
 import { UpstoxService } from "./src/services/upstox/UpstoxService";
 import { UpstoxMarketDataService } from "./src/services/upstox/UpstoxMarketDataService";
+import { OrbVwapEngine } from "./src/services/upstox/OrbVwapEngine";
 import { PredictionStorageService } from "./src/services/PredictionStorageService";
 import { fetchNewsIntelligence, getStockSentiment, getTopNews, getSectorSentiment } from "./src/services/NewsIntelligenceService";
 
@@ -1595,6 +1596,27 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> =>
   // Initialize Upstox service singleton
   const upstoxService = UpstoxService.getInstance();
   const marketDataService = new UpstoxMarketDataService();
+
+  // ORB + VWAP engine — singleton, persists in-memory across requests
+  const orbEngine = new OrbVwapEngine(upstoxService.tokenManager);
+
+  // Scan cache: 60s during market hours, 5min outside
+  let orbScanCache: { signals: any[]; scannedAt: string } | null = null;
+  const getOrbSignals = async (force = false): Promise<{ signals: any[]; scannedAt: string }> => {
+    const ttl = isMarketHours() ? 60_000 : 5 * 60_000;
+    if (!force && orbScanCache && Date.now() - new Date(orbScanCache.scannedAt).getTime() < ttl) {
+      return orbScanCache;
+    }
+    const signals = await orbEngine.scan();
+    orbScanCache = { signals, scannedAt: new Date().toISOString() };
+    return orbScanCache;
+  };
+
+  function isMarketHours(): boolean {
+    const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const mins = ist.getHours() * 60 + ist.getMinutes();
+    return mins >= 9 * 60 + 15 && mins <= 15 * 60 + 30;
+  }
   const getUpstoxCallbackUrl = (req: express.Request) => {
     // On Vercel, always use the env var — it must match exactly what's registered
     // in the Upstox developer app dashboard. Dynamic URL construction can produce
@@ -3420,6 +3442,12 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
     // Pre-fetch real news (uses 8-min cache; non-blocking on failure)
     const newsIntel = await fetchNewsIntelligence().catch(() => null);
 
+    // Pre-fetch ORB/VWAP signals (non-blocking; uses cache if warm)
+    const orbSignals = await getOrbSignals().catch(() => null);
+    const orbSignalMap = new Map<string, any>(
+      (orbSignals?.signals ?? []).map((s: any) => [s.stock, s])
+    );
+
     const universe = await createUltraQuantUniverse();
 
     // ── helpers ──────────────────────────────────────────────────────────
@@ -3468,21 +3496,29 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
       const cur = closes[closes.length - 1];
       const prev = closes[closes.length - 2];
 
-      // Module 1 — Early Rally Detection
+      // Module 1 — Early Rally Detection (ORB + VWAP when available, synthetic fallback)
       const price15ago = closes[Math.max(0, closes.length - 4)];
       const priceAccel = price15ago > 0 ? ((cur - price15ago) / price15ago) * 100 : 0;
       const avgVol = volumes.reduce((a, b) => a + b, 0) / volumes.length;
       const curVol = volumes[volumes.length - 1];
       const volSpike = avgVol > 0 ? curVol / avgVol : 1;
-      const earlyRallySignal = priceAccel > 1.2 && volSpike > 1.8;
+
+      // Real ORB signal overrides synthetic when available
+      const orbData = orbSignalMap.get(profile.symbol);
+      const earlyRallySignal = orbData
+        ? orbData.signal === 'EARLY_RALLY'
+        : priceAccel > 1.2 && volSpike > 1.8;
+
       const recentStd = stdDev(closes.slice(-5));
       const longerStd = stdDev(closes.slice(-20));
       const compressionScore = longerStd > 0 ? clampN(1 - recentStd / longerStd) : 0;
-      const rallyScore = clampN(
-        0.40 * clampN(priceAccel / 5) +
-        0.40 * clampN((volSpike - 1) / 4) +
-        0.20 * compressionScore
-      );
+      const rallyScore = orbData
+        ? clampN(orbData.confidence)
+        : clampN(
+            0.40 * clampN(priceAccel / 5) +
+            0.40 * clampN((volSpike - 1) / 4) +
+            0.20 * compressionScore
+          );
 
       // Module 2 — Quant Filter
       const ema50vals = ema(closes, 50);
@@ -3615,6 +3651,19 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
         institutionalScore: +instScore.toFixed(2), aiPredictionScore: +aiScore.toFixed(2),
         marketRegime: regime, rlAction, finalScore: +finalScore.toFixed(2),
         alerts, signal, confidence, rank: 0,
+        // ORB/VWAP enrichment (present when real data available)
+        ...(orbData ? {
+          orbHigh: orbData.orbHigh,
+          orbLow: orbData.orbLow,
+          orbBreakoutPct: orbData.orbBreakoutPct,
+          vwap: orbData.vwap,
+          priceAboveVwap: orbData.priceAboveVwap,
+          priceAboveOrb: orbData.priceAboveOrb,
+          rsi: orbData.rsi,
+          volumeSpikeConfirmed: orbData.volumeSpikeConfirmed,
+          orbSignal: orbData.signal,
+          dataSource: 'live',
+        } : { dataSource: 'synthetic' }),
       };
     });
 
@@ -3888,6 +3937,53 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
     } catch (err: any) {
       logError("news.intelligence.failed", err);
       res.status(500).json({ error: "Failed to fetch news intelligence" });
+    }
+  });
+
+  // ── ORB + VWAP Early Rally API ────────────────────────────────────────────
+
+  app.get("/api/early-rally/signals", async (req, res) => {
+    try {
+      // Inject latest sentiment scores before scanning
+      const newsIntel = await fetchNewsIntelligence().catch(() => null);
+      if (newsIntel) {
+        const sentMap = new Map<string, number>();
+        newsIntel.items.forEach((item: any) => {
+          item.tickers?.forEach((t: string) => {
+            const existing = sentMap.get(t) ?? 0.5;
+            sentMap.set(t, (existing + (item.sentiment?.score ?? 0.5)) / 2);
+          });
+        });
+        orbEngine.injectSentiment(sentMap);
+      }
+
+      const force = req.query.refresh === 'true';
+      const { signals, scannedAt } = await getOrbSignals(force);
+
+      const earlyRally = signals.filter((s: any) => s.signal === 'EARLY_RALLY');
+      const watch      = signals.filter((s: any) => s.signal === 'WATCH');
+
+      res.json({
+        earlyRally,
+        watch,
+        all: signals,
+        scannedAt,
+        marketHours: isMarketHours(),
+        engineStale: orbEngine.isStale(),
+        lastScanTime: orbEngine.lastScanTime(),
+      });
+    } catch (err: any) {
+      logError("early-rally.signals.failed", err);
+      res.status(500).json({ error: "Failed to fetch early rally signals" });
+    }
+  });
+
+  app.post("/api/early-rally/refresh", async (req, res) => {
+    try {
+      const { signals, scannedAt } = await getOrbSignals(true);
+      res.json({ signals, scannedAt, count: signals.length });
+    } catch (err: any) {
+      res.status(500).json({ error: "Refresh failed" });
     }
   });
 
