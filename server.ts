@@ -4009,27 +4009,7 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
       const topBullish = bullish.slice(0, 20);
       const topBearish = bearish.slice(0, 20);
 
-      // Persist predictions via PredictionStorageService
-      const today = new Date().toISOString().split('T')[0];
-      const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
-      const allTop = [...topBullish, ...topBearish];
-      for (const r of allTop) {
-        try {
-          await PredictionStorageService.savePrediction({
-            stock_symbol: r.stock,
-            prediction_date: today,
-            target_date: tomorrow,
-            prediction: r.prediction,
-            confidence: r.confidence,
-            predicted_price: r.predicted_price,
-            signals: { ...r.signals, ATR: r.indicators.atr },
-            explanation: r.explanation,
-          });
-        } catch (e: any) {
-          console.error('[PredictionScan] save error:', e.message);
-        }
-      }
-
+      // Set cache immediately so live tab always works
       predCache = {
         data: {
           bullish: topBullish, bearish: topBearish,
@@ -4040,6 +4020,30 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
         ts: Date.now(),
       };
       console.log(`[PredictionScan] Done — ${universe.length} stocks, ${bullish.length} bullish, ${bearish.length} bearish`);
+
+      // Persist predictions async — never blocks or crashes the scan
+      const today = new Date().toISOString().split('T')[0];
+      const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+      const allTop = [...topBullish, ...topBearish];
+      (async () => {
+        for (const r of allTop) {
+          try {
+            await PredictionStorageService.savePrediction({
+              stock_symbol: r.stock,
+              prediction_date: today,
+              target_date: tomorrow,
+              prediction: r.prediction,
+              confidence: r.confidence,
+              predicted_price: r.predicted_price,
+              signals: { ...r.signals, ATR: r.indicators.atr },
+              explanation: r.explanation,
+            });
+          } catch (e: any) {
+            console.error('[PredictionScan] save error:', e.message);
+          }
+        }
+        console.log(`[PredictionScan] Persisted ${allTop.length} predictions`);
+      })().catch(e => console.error('[PredictionScan] persist block error:', e.message));
     } finally {
       predRunning = false;
     }

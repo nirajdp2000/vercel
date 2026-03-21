@@ -1082,6 +1082,116 @@ function PredCard({ p, rank, isBullish }: { p: PredStock; rank: number; isBullis
   );
 }
 
+function HistoryCard({ p }: { p: any }) {
+  const [expanded, setExpanded] = useState(false);
+  const isBull = p.prediction === 'Bullish';
+  const hasActual = p.actual_price != null;
+  const correct = p.directionCorrect;
+  const pending = !hasActual;
+
+  const borderCls = pending ? 'border-white/5' : correct ? 'border-emerald-500/25' : 'border-rose-500/25';
+  const bgCls = pending ? 'bg-white/[0.02]' : correct ? 'from-emerald-500/5' : 'from-rose-500/5';
+  const textColor = isBull ? 'text-emerald-400' : 'text-rose-400';
+
+  // Confidence tier
+  const confTier = p.confidence >= 80 ? { label: 'High', color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20' }
+    : p.confidence >= 70 ? { label: 'Med', color: 'text-amber-400', bg: 'bg-amber-500/10 border-amber-500/20' }
+    : { label: 'Low', color: 'text-white/40', bg: 'bg-white/5 border-white/10' };
+
+  const signals = p.signals ? Object.entries(p.signals).filter(([k]) => k !== 'ATR') : [];
+
+  return (
+    <div
+      onClick={() => setExpanded(e => !e)}
+      className={`rounded-2xl border ${borderCls} bg-gradient-to-br ${bgCls} to-transparent p-3 space-y-2.5 cursor-pointer transition-all hover:border-white/10`}
+    >
+      {/* Row 1: symbol + badges + result */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="font-black text-white">{p.stock_symbol}</span>
+          <span className={`inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[8px] font-black border ${isBull ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-rose-500/10 border-rose-500/20 text-rose-400'}`}>
+            {isBull ? <TrendingUp size={8} /> : <TrendingDown size={8} />}
+            {p.prediction}
+          </span>
+          <span className={`inline-flex rounded-md px-1.5 py-0.5 text-[8px] font-black border ${confTier.bg} ${confTier.color}`}>
+            {p.confidence}% {confTier.label}
+          </span>
+        </div>
+        {pending ? (
+          <span className="text-[8px] text-white/20 font-bold uppercase tracking-[0.1em] shrink-0">Awaiting</span>
+        ) : (
+          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[8px] font-black uppercase shrink-0 ${correct ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}`}>
+            {correct ? '✓ Correct' : '✗ Wrong'}
+          </span>
+        )}
+      </div>
+
+      {/* Confidence bar */}
+      <div className="h-1 rounded-full bg-white/5 overflow-hidden">
+        <div className={`h-full rounded-full ${isBull ? 'bg-emerald-500' : 'bg-rose-500'}`} style={{ width: `${p.confidence}%` }} />
+      </div>
+
+      {/* Price row */}
+      <div className="flex items-center gap-2 text-[10px] flex-wrap">
+        <span className="text-white/40">Target: <span className={`font-bold ${textColor}`}>{p.predicted_price?.toFixed(2) ?? '—'}</span></span>
+        {hasActual ? (
+          <>
+            <span className="text-white/20">→</span>
+            <span className="text-white/40">Actual: <span className={`font-bold ${p.actual_change >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{p.actual_price?.toFixed(2)}</span></span>
+            <span className={`font-black ${p.actual_change >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {p.actual_change >= 0 ? '+' : ''}{p.actual_change?.toFixed(2)}%
+            </span>
+            {p.priceError != null && (
+              <span className={`ml-auto text-[9px] font-black ${p.priceError < 2 ? 'text-emerald-400' : p.priceError < 5 ? 'text-amber-400' : 'text-rose-400'}`}>
+                Δ{p.priceError.toFixed(2)}% err
+              </span>
+            )}
+          </>
+        ) : (
+          <span className="text-white/20 text-[9px]">actual price not yet recorded</span>
+        )}
+      </div>
+
+      {/* Price error bar — only when resolved */}
+      {hasActual && p.priceError != null && (
+        <div className="h-1 rounded-full bg-white/5 overflow-hidden">
+          <div
+            className={`h-full rounded-full ${p.priceError < 2 ? 'bg-emerald-500' : p.priceError < 5 ? 'bg-amber-400' : 'bg-rose-500'}`}
+            style={{ width: `${Math.min(100, p.priceError * 10)}%` }}
+          />
+        </div>
+      )}
+
+      {/* Explanation */}
+      {p.explanation && (
+        <p className="text-[9px] text-white/40 leading-relaxed">{p.explanation}</p>
+      )}
+
+      {/* Expanded: signal breakdown */}
+      {expanded && signals.length > 0 && (
+        <div className="space-y-1.5 pt-2 border-t border-white/5">
+          <p className="text-[8px] font-black uppercase tracking-[0.15em] text-white/25 mb-1.5">Signal Breakdown</p>
+          {signals.map(([key, val]: [string, any]) => {
+            const v = typeof val === 'number' ? val : 0;
+            const pct = Math.round(Math.abs(v) * 100);
+            const isPos = v >= 0;
+            const colorMap: Record<string, string> = { RSI: isPos ? 'bg-emerald-500' : 'bg-rose-500', MACD: isPos ? 'bg-emerald-500' : 'bg-rose-500', Volume: 'bg-amber-400', Trend: isPos ? 'bg-cyan-400' : 'bg-rose-500', Sentiment: isPos ? 'bg-violet-400' : 'bg-rose-500', Bollinger: isPos ? 'bg-blue-400' : 'bg-rose-500' };
+            return (
+              <div key={key} className="flex items-center gap-2 text-[9px]">
+                <span className="w-14 text-white/40 uppercase tracking-[0.1em] shrink-0">{key}</span>
+                <div className="flex-1 h-1 rounded-full bg-white/5 overflow-hidden">
+                  <div className={`h-full rounded-full ${colorMap[key] ?? 'bg-white/30'}`} style={{ width: `${pct}%` }} />
+                </div>
+                <span className={`w-10 text-right font-bold ${isPos ? 'text-emerald-400' : 'text-rose-400'}`}>{isPos ? '+' : ''}{v.toFixed(2)}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function NextDayPredictions() {
   const [tab, setTab] = useState<'live' | 'history'>('live');
   const [data, setData] = useState<PredData | null>(null);
@@ -1398,7 +1508,8 @@ function NextDayPredictions() {
       {/* ── HISTORY TAB ── */}
       {tab === 'history' && (
         <div className="space-y-4">
-          {/* Overall accuracy stats */}
+
+          {/* Overall accuracy stats — only show when we have resolved data */}
           {accuracy && accuracy.total > 0 && (
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               {[
@@ -1417,14 +1528,14 @@ function NextDayPredictions() {
 
           {/* Date selector */}
           {historyDates.length > 0 ? (
-            <div className="flex flex-wrap gap-2 items-center">
-              <span className="text-[9px] text-white/30 uppercase tracking-[0.15em] font-bold">Select Date:</span>
+            <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-3 space-y-2">
+              <p className="text-[9px] text-white/30 uppercase tracking-[0.15em] font-bold">Prediction Date</p>
               <div className="flex flex-wrap gap-1.5">
                 {historyDates.slice(0, 14).map(d => (
                   <button
                     key={d}
                     onClick={() => { setHistoryDate(d); loadHistory(d); }}
-                    className={`rounded-lg px-3 py-1 text-[9px] font-black transition-all border ${
+                    className={`rounded-lg px-3 py-1.5 text-[9px] font-black transition-all border ${
                       historyDate === d
                         ? 'bg-violet-500/20 text-violet-300 border-violet-500/30'
                         : 'text-white/30 border-white/5 hover:text-white/60 hover:border-white/10'
@@ -1436,10 +1547,12 @@ function NextDayPredictions() {
               </div>
             </div>
           ) : (
-            <div className="flex flex-col items-center gap-3 py-12 text-white/20">
-              <Clock size={28} className="opacity-30" />
-              <p className="text-sm font-bold">No prediction history yet</p>
-              <p className="text-[11px]">Run predictions from the Live tab to start building history</p>
+            <div className="flex flex-col items-center gap-3 py-16 text-white/20">
+              <div className="w-14 h-14 rounded-full border border-white/5 flex items-center justify-center">
+                <Clock size={24} className="opacity-30" />
+              </div>
+              <p className="text-sm font-bold text-white/40">No prediction history yet</p>
+              <p className="text-[11px] text-center max-w-xs">Run predictions from the Live tab — they'll be saved here automatically after each scan</p>
             </div>
           )}
 
@@ -1451,141 +1564,92 @@ function NextDayPredictions() {
           )}
 
           {/* Smart comparison summary panel */}
-          {!histLoading && compareData && compareData.summary.resolved > 0 && (
-            <div className="rounded-2xl border border-violet-500/20 bg-violet-500/5 p-4 space-y-3">
-              <p className="text-[9px] font-black uppercase tracking-[0.15em] text-violet-400">Smart Comparison — {compareData.date}</p>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {!histLoading && compareData && compareData.summary.total > 0 && (
+            <div className="rounded-2xl border border-violet-500/20 bg-gradient-to-br from-violet-500/5 to-transparent p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-[9px] font-black uppercase tracking-[0.15em] text-violet-400">Smart Comparison</p>
+                <span className="text-[9px] text-white/30 font-mono">{compareData.date}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 {[
                   {
                     label: 'Direction Accuracy',
-                    value: compareData.summary.directionAccuracy != null ? `${compareData.summary.directionAccuracy.toFixed(1)}%` : '—',
-                    color: (compareData.summary.directionAccuracy ?? 0) >= 60 ? 'text-emerald-400' : 'text-rose-400',
+                    value: compareData.summary.directionAccuracy != null ? `${compareData.summary.directionAccuracy.toFixed(1)}%` : 'Pending',
+                    color: compareData.summary.directionAccuracy == null ? 'text-white/30' : (compareData.summary.directionAccuracy >= 60 ? 'text-emerald-400' : 'text-rose-400'),
+                    sub: compareData.summary.resolved > 0 ? `${compareData.summary.correct}/${compareData.summary.resolved} resolved` : 'awaiting actuals',
                   },
                   {
-                    label: 'Resolved',
-                    value: `${compareData.summary.resolved}/${compareData.summary.total}`,
+                    label: 'Total Predictions',
+                    value: compareData.summary.total,
                     color: 'text-white',
+                    sub: `${compareData.summary.total - compareData.summary.resolved} pending`,
                   },
                   {
                     label: 'Avg Price Error',
                     value: compareData.summary.avgPriceError != null ? `${compareData.summary.avgPriceError.toFixed(2)}%` : '—',
-                    color: (compareData.summary.avgPriceError ?? 99) < 2 ? 'text-emerald-400' : 'text-amber-400',
+                    color: compareData.summary.avgPriceError == null ? 'text-white/30' : (compareData.summary.avgPriceError < 2 ? 'text-emerald-400' : 'text-amber-400'),
+                    sub: 'predicted vs actual',
                   },
                   {
-                    label: 'High Conf Accuracy',
+                    label: 'High Conf (≥75%)',
                     value: compareData.summary.highConfAccuracy != null ? `${compareData.summary.highConfAccuracy.toFixed(1)}%` : '—',
-                    color: (compareData.summary.highConfAccuracy ?? 0) >= 65 ? 'text-emerald-400' : 'text-rose-400',
+                    color: compareData.summary.highConfAccuracy == null ? 'text-white/30' : (compareData.summary.highConfAccuracy >= 65 ? 'text-emerald-400' : 'text-rose-400'),
+                    sub: 'calibration check',
                   },
                 ].map(k => (
-                  <div key={k.label} className="text-center">
-                    <p className={`text-xl font-black ${k.color}`}>{k.value}</p>
-                    <p className="text-[8px] font-bold uppercase tracking-[0.12em] text-white/30 mt-0.5">{k.label}</p>
+                  <div key={k.label} className="rounded-xl bg-white/[0.03] border border-white/5 p-3 text-center space-y-0.5">
+                    <p className={`text-lg font-black ${k.color}`}>{k.value}</p>
+                    <p className="text-[8px] font-bold uppercase tracking-[0.12em] text-white/30">{k.label}</p>
+                    <p className="text-[8px] text-white/20">{k.sub}</p>
                   </div>
                 ))}
               </div>
-              {/* Accuracy bar */}
-              {compareData.summary.directionAccuracy != null && (
-                <div className="space-y-1">
+              {compareData.summary.resolved > 0 && compareData.summary.directionAccuracy != null && (
+                <div className="space-y-1.5">
                   <div className="flex justify-between text-[9px] font-bold">
-                    <span className="text-emerald-400">Correct {compareData.summary.correct}</span>
-                    <span className="text-rose-400">Wrong {compareData.summary.resolved - compareData.summary.correct}</span>
+                    <span className="text-emerald-400">✓ Correct — {compareData.summary.correct}</span>
+                    <span className="text-rose-400">✗ Wrong — {compareData.summary.resolved - compareData.summary.correct}</span>
                   </div>
-                  <div className="h-2 rounded-full bg-rose-500/20 overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-emerald-500 transition-all duration-700"
-                      style={{ width: `${compareData.summary.directionAccuracy}%` }}
-                    />
+                  <div className="h-2.5 rounded-full bg-rose-500/20 overflow-hidden">
+                    <div className="h-full rounded-full bg-gradient-to-r from-emerald-600 to-emerald-400 transition-all duration-700" style={{ width: `${compareData.summary.directionAccuracy}%` }} />
                   </div>
+                  <p className="text-[9px] text-white/30 text-center">
+                    {compareData.summary.directionAccuracy >= 60 ? 'Model performing above baseline' : compareData.summary.directionAccuracy >= 50 ? 'Near baseline — needs more data' : 'Underperforming — review signal weights'}
+                  </p>
                 </div>
               )}
             </div>
           )}
 
-          {/* Prediction comparison cards */}
+          {/* Prediction cards — bullish + bearish sections */}
           {!histLoading && compareData && compareData.predictions.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-[9px] font-black uppercase tracking-[0.15em] text-white/25">
-                {compareData.predictions.length} predictions — click to see signal breakdown
-              </p>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                {compareData.predictions.map((p: any, i: number) => {
-                  const isBull = p.prediction === 'Bullish';
-                  const hasActual = p.actual_price != null;
-                  const correct = p.directionCorrect;
-                  const pending = !hasActual;
-                  const priceDelta = p.predicted_price > 0
-                    ? (((p.predicted_price - (p.current_price ?? p.predicted_price)) / (p.current_price ?? p.predicted_price)) * 100)
-                    : 0;
-
-                  let borderCls = 'border-white/5';
-                  let bgCls = 'bg-white/[0.02]';
-                  if (!pending) {
-                    borderCls = correct ? 'border-emerald-500/25' : 'border-rose-500/25';
-                    bgCls = correct ? 'from-emerald-500/5' : 'from-rose-500/5';
-                  }
-
-                  return (
-                    <div key={i} className={`rounded-2xl border ${borderCls} bg-gradient-to-br ${bgCls} to-transparent p-3 space-y-2`}>
-                      {/* Header row */}
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <span className="font-black text-white text-sm">{p.stock_symbol}</span>
-                          <span className={`inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[8px] font-black border ${isBull ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-rose-500/10 border-rose-500/20 text-rose-400'}`}>
-                            {isBull ? <TrendingUp size={8} /> : <TrendingDown size={8} />}
-                            {p.prediction}
-                          </span>
-                          <span className="text-[8px] text-violet-400 font-black">{p.confidence}%</span>
-                        </div>
-                        {pending ? (
-                          <span className="text-[8px] text-white/20 font-bold uppercase tracking-[0.1em]">Pending</span>
-                        ) : (
-                          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[8px] font-black uppercase ${correct ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}`}>
-                            {correct ? '✓ Correct' : '✗ Wrong'}
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Price comparison row */}
-                      <div className="flex items-center gap-3 text-[10px]">
-                        <span className="text-white/40">Predicted: <span className={`font-bold ${isBull ? 'text-emerald-400' : 'text-rose-400'}`}>{p.predicted_price?.toFixed(2) ?? '—'}</span></span>
-                        {hasActual && (
-                          <>
-                            <span className="text-white/20">→</span>
-                            <span className="text-white/40">Actual: <span className={`font-bold ${p.actual_change >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{p.actual_price?.toFixed(2)}</span></span>
-                            <span className={`font-black text-[9px] ${p.actual_change >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                              {p.actual_change >= 0 ? '+' : ''}{p.actual_change?.toFixed(2)}%
-                            </span>
-                          </>
-                        )}
-                      </div>
-
-                      {/* Price error + confidence bar */}
-                      {hasActual && p.priceError != null && (
-                        <div className="flex items-center gap-2 text-[9px]">
-                          <span className="text-white/30">Price Error:</span>
-                          <span className={`font-black ${p.priceError < 2 ? 'text-emerald-400' : p.priceError < 5 ? 'text-amber-400' : 'text-rose-400'}`}>
-                            {p.priceError.toFixed(2)}%
-                          </span>
-                          <div className="flex-1 h-1 rounded-full bg-white/5 overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${p.priceError < 2 ? 'bg-emerald-500' : p.priceError < 5 ? 'bg-amber-400' : 'bg-rose-500'}`}
-                              style={{ width: `${Math.min(100, p.priceError * 10)}%` }}
-                            />
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Confidence bar */}
-                      <div className="h-1 rounded-full bg-white/5 overflow-hidden">
-                        <div
-                          className={`h-full rounded-full ${isBull ? 'bg-emerald-500/60' : 'bg-rose-500/60'}`}
-                          style={{ width: `${p.confidence}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+            <div className="space-y-3">
+              {compareData.predictions.filter((p: any) => p.prediction === 'Bullish').length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <TrendingUp size={12} className="text-emerald-400" />
+                    <span className="text-[10px] font-black uppercase tracking-[0.15em] text-emerald-400">
+                      Bullish ({compareData.predictions.filter((p: any) => p.prediction === 'Bullish').length})
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {compareData.predictions.filter((p: any) => p.prediction === 'Bullish').map((p: any, i: number) => <HistoryCard key={i} p={p} />)}
+                  </div>
+                </div>
+              )}
+              {compareData.predictions.filter((p: any) => p.prediction === 'Bearish').length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <TrendingDown size={12} className="text-rose-400" />
+                    <span className="text-[10px] font-black uppercase tracking-[0.15em] text-rose-400">
+                      Bearish ({compareData.predictions.filter((p: any) => p.prediction === 'Bearish').length})
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {compareData.predictions.filter((p: any) => p.prediction === 'Bearish').map((p: any, i: number) => <HistoryCard key={i} p={p} />)}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
