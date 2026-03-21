@@ -2,7 +2,6 @@ import express from "express";
 import { initUniverse, getUniverse, getUniverseAsync, setFallbackUniverse } from "./src/services/StockUniverseService";
 import axios from "axios";
 import dotenv from "dotenv";
-import { GoogleGenAI } from "@google/genai";
 import {
   errorLoggingMiddleware,
   installProcessErrorHandlers,
@@ -2157,50 +2156,17 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
   const { symbol, data, interval, quantData, advancedIntelligence } = req.body;
 
   if (!data || !Array.isArray(data) || data.length === 0) {
-    logAction("ai.analysis.rejected", {
-      symbol,
-      reason: "missing_price_data",
-    });
+    logAction("ai.analysis.rejected", { symbol, reason: "missing_price_data" });
     return res.status(400).json({ error: "No data provided for analysis" });
   }
 
   try {
-    // Model priority: env override → gemini-2.0-flash (current free-tier default) → flash-lite fallback
-    const model = process.env.GEMINI_MODEL || "gemini-2.0-flash";
-    
-    // Prioritize API_KEY (injected by platform dialog) then GEMINI_API_KEY, then hardcoded fallback
-    const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || "AIzaSyCXvF9evVNikMsodzQSK1HhmIXAjyaEMfU";
-    
-    if (!apiKey || apiKey === "YOUR_API_KEY") {
-      logAction("ai.analysis.fallback", {
-        symbol,
-        provider: "local-fallback",
-        reason: "missing_gemini_api_key",
-      });
-      return res.json(buildFallbackAiAnalysis({
-        symbol,
-        data,
-        interval,
-        quantData,
-        advancedIntelligence,
-        reason: "Gemini API key not configured"
-      }));
-    }
+    const openaiKey = process.env.OPENAI_API_KEY || "";
+    const openaiModel = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
-    // Masked logging for debugging (only first 4 and last 4 chars)
-    const maskedKey = apiKey.length > 8 
-      ? `${apiKey.substring(0, 4)}...${apiKey.substring(apiKey.length - 4)}` 
-      : "****";
-    logAction("ai.analysis.provider.selected", {
-      symbol,
-      provider: "gemini",
-      apiKey: maskedKey,
-      interval,
-    });
-    
-    const ai = new GoogleGenAI({ apiKey });
+    logAction("ai.analysis.provider.selected", { symbol, provider: "openai", model: openaiModel, interval });
 
-    // Compute derived technicals server-side to enrich the prompt
+    // ── Pre-compute technicals ──────────────────────────────────────────────
     const candles50 = data.slice(-50);
     const candles20 = data.slice(-20);
     const latestClose = Number(candles50[candles50.length - 1]?.close ?? 0);
@@ -2209,51 +2175,45 @@ app.post("/api/ai/analyze", withErrorBoundary(async (req, res) => {
     const low20  = Math.min(...candles20.map((c: any) => Number(c.low  ?? c.close ?? 0)));
     const avgVol20 = candles20.reduce((s: number, c: any) => s + Number(c.volume ?? 0), 0) / (candles20.length || 1);
     const latestVol = Number(candles50[candles50.length - 1]?.volume ?? 0);
-    const volRatio   = avgVol20 ? (latestVol / avgVol20).toFixed(2) : "1.00";
-    const pctChange  = prevClose ? (((latestClose - prevClose) / prevClose) * 100).toFixed(2) : "0.00";
+    const volRatio  = avgVol20 ? (latestVol / avgVol20).toFixed(2) : "1.00";
+    const pctChange = prevClose ? (((latestClose - prevClose) / prevClose) * 100).toFixed(2) : "0.00";
     const ema9 = (() => {
-      const k = 2 / (9 + 1);
-      let ema = Number(candles50[0]?.close ?? latestClose);
-      for (const c of candles50) { ema = Number(c.close) * k + ema * (1 - k); }
+      const k = 2 / 10; let ema = Number(candles50[0]?.close ?? latestClose);
+      for (const c of candles50) ema = Number(c.close) * k + ema * (1 - k);
       return ema.toFixed(2);
     })();
     const ema21 = (() => {
-      const k = 2 / (21 + 1);
-      let ema = Number(candles50[0]?.close ?? latestClose);
-      for (const c of candles50) { ema = Number(c.close) * k + ema * (1 - k); }
+      const k = 2 / 22; let ema = Number(candles50[0]?.close ?? latestClose);
+      for (const c of candles50) ema = Number(c.close) * k + ema * (1 - k);
       return ema.toFixed(2);
     })();
-    // RSI-14
     const rsi14 = (() => {
       const closes = candles50.map((c: any) => Number(c.close ?? 0));
       if (closes.length < 15) return 50;
       let gains = 0, losses = 0;
-      for (let i = 1; i <= 14; i++) {
-        const d = closes[i] - closes[i - 1];
-        if (d > 0) gains += d; else losses -= d;
-      }
+      for (let i = 1; i <= 14; i++) { const d = closes[i] - closes[i-1]; if (d > 0) gains += d; else losses -= d; }
       let avgG = gains / 14, avgL = losses / 14;
       for (let i = 15; i < closes.length; i++) {
-        const d = closes[i] - closes[i - 1];
+        const d = closes[i] - closes[i-1];
         avgG = (avgG * 13 + Math.max(d, 0)) / 14;
         avgL = (avgL * 13 + Math.max(-d, 0)) / 14;
       }
       return avgL === 0 ? 100 : Math.round(100 - 100 / (1 + avgG / avgL));
     })();
-    // ATR-14
     const atr14 = (() => {
-      const slice = candles50.slice(-15);
-      let atr = 0;
+      const slice = candles50.slice(-15); let atr = 0;
       for (let i = 1; i < slice.length; i++) {
         const h = Number(slice[i].high ?? slice[i].close ?? 0);
         const l = Number(slice[i].low  ?? slice[i].close ?? 0);
-        const pc = Number(slice[i - 1].close ?? 0);
+        const pc = Number(slice[i-1].close ?? 0);
         atr += Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
       }
       return (atr / 14).toFixed(2);
     })();
 
-    const prompt = `You are a senior quantitative analyst at a top-tier hedge fund specialising in Indian equity markets (NSE/BSE). Perform a full institutional-grade analysis of ${symbol} on the ${interval} timeframe.
+    const systemPrompt = `You are a senior quantitative analyst at a top-tier hedge fund specialising in Indian equity markets (NSE/BSE). You produce institutional-grade analysis. Always respond with ONLY a valid JSON object — no markdown fences, no prose outside the JSON.`;
+
+    const userPrompt = `Perform a full institutional-grade analysis of ${symbol} on the ${interval} timeframe.
 
 === PRICE DATA (last 50 candles) ===
 ${JSON.stringify(candles50.map((c: any) => ({ t: c.fullTime, o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume })))}
@@ -2261,197 +2221,94 @@ ${JSON.stringify(candles50.map((c: any) => ({ t: c.fullTime, o: c.open, h: c.hig
 === PRE-COMPUTED TECHNICALS ===
 Current Price : ${latestClose}
 1-bar Change  : ${pctChange}%
-20-bar High   : ${high20} | Low: ${low20}
-EMA-9         : ${ema9}  | EMA-21: ${ema21}
+20-bar High/Low: ${high20} / ${low20}
+EMA-9 / EMA-21: ${ema9} / ${ema21}
 RSI-14        : ${rsi14}
 ATR-14        : ${atr14}
 Volume Ratio  : ${volRatio}x (vs 20-bar avg)
-
-${quantData ? `=== QUANT SIGNALS ===
+${quantData ? `
+=== QUANT SIGNALS ===
 Market Sentiment : ${quantData.sentiment?.status} (Confidence: ${quantData.sentiment?.confidence}%)
 Top Sectors      : ${JSON.stringify(quantData.sectors?.slice(0, 5))}
 Momentum Alerts  : ${JSON.stringify(quantData.momentum?.slice(0, 5))}
 Breakout Signals : ${JSON.stringify(quantData.breakouts?.slice(0, 5))}` : ''}
-
-${advancedIntelligence ? `=== ADVANCED INTELLIGENCE ===
+${advancedIntelligence ? `
+=== ADVANCED INTELLIGENCE ===
 Momentum Prediction : ${advancedIntelligence.momentumPrediction?.probability}% probability of ${advancedIntelligence.momentumPrediction?.predictedMove} move
 Order Flow          : ${advancedIntelligence.orderFlow?.status} (Imbalance: ${advancedIntelligence.orderFlow?.imbalance}x)
 Pattern Recognition : ${advancedIntelligence.patternRecognition?.pattern} (${advancedIntelligence.patternRecognition?.status})
-Smart Money Phase   : ${advancedIntelligence.smartMoney?.phase} (Accumulation Score: ${advancedIntelligence.smartMoney?.accumulationScore})` : ''}
+Smart Money Phase   : ${advancedIntelligence.smartMoney?.phase} (Score: ${advancedIntelligence.smartMoney?.accumulationScore})` : ''}
 
 Current Date/Time: ${new Date().toISOString()}
 
-=== OUTPUT FORMAT ===
-Respond ONLY with a single valid JSON object — no markdown fences, no prose outside the JSON.
-
+Respond ONLY with this JSON structure (fill every field):
 {
-  "signal": "BUY" | "SELL" | "HOLD",
-  "confidence": <integer 0-100>,
-  "signalReason": "<1-sentence decisive reason>",
-  "executiveSummary": "<2-3 sentence hedge-fund-style overview>",
-  "marketRegime": "<Trending Bull | Trending Bear | Range-Bound | Breakout | Distribution | Accumulation>",
-  "trendAnalysis": {
-    "direction": "<Uptrend | Downtrend | Sideways>",
-    "strength": "<Strong | Moderate | Weak>",
-    "ema9VsEma21": "<Bullish crossover | Bearish crossover | Aligned bullish | Aligned bearish | Neutral>",
-    "exhaustionSignals": "<describe any exhaustion or continuation signals>"
-  },
-  "keyLevels": {
-    "s2": <number>,
-    "s1": <number>,
-    "pivot": <number>,
-    "r1": <number>,
-    "r2": <number>,
-    "stopLoss": <number>,
-    "target1": <number>,
-    "target2": <number>
-  },
-  "riskReward": {
-    "entryZone": "<price range string>",
-    "stopLoss": <number>,
-    "target1": <number>,
-    "target2": <number>,
-    "rrRatio": "<e.g. 1:2.5>",
-    "maxRiskPct": <number>,
-    "kellyPositionSizePct": <number>
-  },
-  "technicalIndicators": {
-    "rsi14": ${rsi14},
-    "rsiSignal": "<Overbought | Oversold | Neutral | Bullish divergence | Bearish divergence>",
-    "atr14": ${atr14},
-    "volumeRatio": ${volRatio},
-    "volumeSignal": "<Climax buy | Climax sell | Accumulation | Distribution | Normal>",
-    "candlePattern": "<name of dominant pattern or 'None'>",
-    "macdSignal": "<Bullish | Bearish | Neutral — inferred from EMA crossover>"
-  },
-  "institutionalFlow": {
-    "phase": "<Accumulation | Distribution | Mark-up | Mark-down | Re-accumulation>",
-    "smartMoneyBias": "<Bullish | Bearish | Neutral>",
-    "fiiDiiContext": "<brief inference about FII/DII likely positioning based on price/volume behaviour>",
-    "orderFlowImbalance": "<Bid-heavy | Ask-heavy | Balanced>"
-  },
-  "sectorContext": {
-    "sectorBias": "<sector name and whether it is leading or lagging the broader market>",
-    "relativeStrength": "<Outperforming | Underperforming | In-line>",
-    "rotationSignal": "<Money flowing in | Money flowing out | Neutral>"
-  },
-  "multiTimeframeConfluence": {
-    "daily": "<brief bias>",
-    "weekly": "<brief bias>",
-    "intraday": "<brief bias>",
-    "confluenceScore": <integer 0-100>,
-    "confluenceSummary": "<1-sentence summary of alignment>"
-  },
-  "scenarios": {
-    "bull": {
-      "trigger": "<what needs to happen>",
-      "target": <number>,
-      "probability": <integer 0-100>
-    },
-    "bear": {
-      "trigger": "<what needs to happen>",
-      "target": <number>,
-      "probability": <integer 0-100>
-    }
-  },
-  "psychologicalAudit": "<2-3 sentences on retail vs institutional sentiment, fear/greed, and likely crowd behaviour>",
-  "catalystCalendar": "<any known upcoming events: earnings, results, index rebalancing, macro data — or 'No known near-term catalysts'>",
-  "actionPlan": "<3-4 sentence concrete trading plan: entry trigger, position size rationale, stop placement, exit strategy>"
-}
-`;
+  "signal": "BUY",
+  "confidence": 78,
+  "signalReason": "one sentence",
+  "executiveSummary": "2-3 sentences",
+  "marketRegime": "Trending Bull",
+  "trendAnalysis": { "direction": "Uptrend", "strength": "Moderate", "ema9VsEma21": "Aligned bullish", "exhaustionSignals": "none visible" },
+  "keyLevels": { "s2": 0, "s1": 0, "pivot": 0, "r1": 0, "r2": 0, "stopLoss": 0, "target1": 0, "target2": 0 },
+  "riskReward": { "entryZone": "price range", "stopLoss": 0, "target1": 0, "target2": 0, "rrRatio": "1:2.5", "maxRiskPct": 1.5, "kellyPositionSizePct": 8 },
+  "technicalIndicators": { "rsi14": ${rsi14}, "rsiSignal": "Neutral", "atr14": ${atr14}, "volumeRatio": ${volRatio}, "volumeSignal": "Normal", "candlePattern": "None", "macdSignal": "Bullish" },
+  "institutionalFlow": { "phase": "Accumulation", "smartMoneyBias": "Bullish", "fiiDiiContext": "brief inference", "orderFlowImbalance": "Bid-heavy" },
+  "sectorContext": { "sectorBias": "sector name — leading", "relativeStrength": "Outperforming", "rotationSignal": "Money flowing in" },
+  "multiTimeframeConfluence": { "daily": "brief bias", "weekly": "brief bias", "intraday": "brief bias", "confluenceScore": 72, "confluenceSummary": "one sentence" },
+  "scenarios": { "bull": { "trigger": "what needs to happen", "target": 0, "probability": 60 }, "bear": { "trigger": "what needs to happen", "target": 0, "probability": 40 } },
+  "psychologicalAudit": "2-3 sentences on retail vs institutional sentiment",
+  "catalystCalendar": "upcoming events or No known near-term catalysts",
+  "actionPlan": "3-4 sentence concrete trading plan"
+}`;
 
-    // Retry logic for 503 errors; on 404 try fallback models
-    let result;
-    let retries = 3;
-    let delay = 2000;
-    const modelFallbacks = [model, "gemini-2.0-flash-lite", "gemini-1.5-flash", "gemini-1.5-flash-8b"];
-    let modelIdx = 0;
+    // Call OpenAI
+    const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${openaiKey}` },
+      body: JSON.stringify({
+        model: openaiModel,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user",   content: userPrompt }
+        ],
+        temperature: 0.3,
+        max_tokens: 2000,
+        response_format: { type: "json_object" }
+      })
+    });
 
-    while (retries > 0) {
-      try {
-        const activeModel = modelFallbacks[modelIdx] ?? model;
-        result = await ai.models.generateContent({
-          model: activeModel,
-          contents: prompt
-        });
-        logAction("ai.analysis.model.used", { symbol, model: activeModel });
-        break; // Success
-      } catch (err: any) {
-        const is503 = err.message?.includes("503") || err.status === 503 || (err.error?.code === 503);
-        const is404 = err.message?.includes("404") || err.status === 404 || (err.error?.code === 404);
-        if (is404 && modelIdx < modelFallbacks.length - 1) {
-          console.log(`Model ${modelFallbacks[modelIdx]} not found, trying ${modelFallbacks[modelIdx + 1]}...`);
-          modelIdx++;
-          // don't decrement retries on model switch
-        } else if (is503 && retries > 1) {
-          console.log(`Gemini 503 error, retrying in ${delay}ms... (${retries - 1} retries left)`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-          retries--;
-          delay *= 2;
-        } else {
-          throw err;
-        }
-      }
+    if (!openaiRes.ok) {
+      const errText = await openaiRes.text();
+      throw new Error(`OpenAI ${openaiRes.status}: ${errText}`);
     }
 
-    if (!result) {
-      throw new Error("Failed to get response from Gemini");
-    }
+    const openaiJson = await openaiRes.json() as any;
+    const rawText = openaiJson.choices?.[0]?.message?.content || "";
 
-    const rawText = result.text || "";
-
-    // Parse structured JSON from Gemini — strip any accidental markdown fences
     let hedgeFundData: any = null;
     try {
       const cleaned = rawText.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
       hedgeFundData = JSON.parse(cleaned);
-    } catch {
-      // JSON parse failed — fall back to extracting what we can from raw text
-      hedgeFundData = null;
-    }
-
-    const sources = result.candidates?.[0]?.groundingMetadata?.groundingChunks?.map((chunk: any) => ({
-      title: chunk.web?.title,
-      url: chunk.web?.uri
-    })).filter((s: any) => s.title && s.url) || [];
+    } catch { hedgeFundData = null; }
 
     if (hedgeFundData) {
       res.json({
-        analysis: rawText,          // kept for legacy markdown fallback
-        hedgeFund: hedgeFundData,   // structured hedge-fund payload
-        sources,
+        analysis: rawText,
+        hedgeFund: hedgeFundData,
+        sources: [],
         confidence: hedgeFundData.confidence ?? 75,
         recommendation: (hedgeFundData.signal ?? "NEUTRAL").toUpperCase(),
-        provider: "gemini"
+        provider: "openai"
       });
     } else {
-      // Graceful degradation: extract basics from raw text
-      const confidenceMatch = rawText.match(/confidence["\s:]+(\d+)/i);
-      const confidence = confidenceMatch ? parseInt(confidenceMatch[1]) : 75;
-      const recMatch = rawText.match(/"signal"\s*:\s*"(BUY|SELL|HOLD)"/i);
-      const recommendation = recMatch ? recMatch[1].toUpperCase() : "NEUTRAL";
-      res.json({ analysis: rawText, sources, confidence, recommendation, provider: "gemini" });
+      res.json({ analysis: rawText, sources: [], confidence: 75, recommendation: "NEUTRAL", provider: "openai" });
     }
-    } catch (error: any) {
-      logError("ai.analysis.failed", error, {
-        symbol,
-        interval,
-      });
-      logAction("ai.analysis.fallback", {
-        symbol,
-        provider: "local-fallback",
-        reason: error?.message || "gemini_request_failed",
-      });
-      res.json(buildFallbackAiAnalysis({
-        symbol,
-        data,
-        interval,
-        quantData,
-        advancedIntelligence,
-        reason: error?.message || "Gemini request failed"
-      }));
-    }
-  }));
+
+  } catch (error: any) {
+    logError("ai.analysis.failed", error, { symbol, interval });
+    res.json(buildFallbackAiAnalysis({ symbol, data, interval, quantData, advancedIntelligence, reason: error?.message || "OpenAI request failed" }));
+  }
+}));
 
   app.get("/api/premium/momentum", withErrorBoundary(async (req, res) => {
     // Premium momentum alerts - uses real Upstox data when connected
