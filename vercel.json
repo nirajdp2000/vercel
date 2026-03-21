@@ -2,6 +2,13 @@
   "version": 2,
   "buildCommand": "npm run vercel-build",
   "outputDirectory": "dist",
+  "env": {
+    "UPSTOX_CLIENT_ID": "80af4324-44bf-4bff-9a4d-764536b514e1",
+    "UPSTOX_CLIENT_SECRET": "ilm324qk8m",
+    "UPSTOX_REDIRECT_URI": "https://nirajstock.vercel.app/api/upstox/callback",
+    "GEMINI_API_KEY": "AIzaSyD1DHKMhttOMNxDKUF2VFFKiOM76GpTnbw",
+    "API_KEY": "AIzaSyD1DHKMhttOMNxDKUF2VFFKiOM76GpTnbw"
+  },
   "functions": {
     "api/index.ts": {
       "maxDuration": 30,
