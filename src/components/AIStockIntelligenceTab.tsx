@@ -913,6 +913,14 @@ interface HistoryData {
   date: string; bullish: any[]; bearish: any[]; total: number;
 }
 interface AccuracyData { total: number; correct: number; accuracy: number; avgConfidence: number; }
+interface CompareData {
+  date: string;
+  predictions: any[];
+  summary: {
+    total: number; resolved: number; correct: number;
+    directionAccuracy: number | null; avgPriceError: number | null; highConfAccuracy: number | null;
+  };
+}
 
 function SignalBar({ label, value, color }: { label: string; value: number; color: string }) {
   const pct = Math.round(Math.abs(value) * 100);
@@ -1083,6 +1091,7 @@ function NextDayPredictions() {
   const [historyData, setHistoryData] = useState<HistoryData | null>(null);
   const [historyDates, setHistoryDates] = useState<string[]>([]);
   const [accuracy, setAccuracy] = useState<AccuracyData | null>(null);
+  const [compareData, setCompareData] = useState<CompareData | null>(null);
   const [histLoading, setHistLoading] = useState(false);
   const [filterSector, setFilterSector] = useState('All');
   const [filterType, setFilterType] = useState<'All' | 'Bullish' | 'Bearish'>('All');
@@ -1113,8 +1122,12 @@ function NextDayPredictions() {
     if (!date) return;
     setHistLoading(true);
     try {
-      const res = await fetch(`/api/predictions/history/${date}`);
-      setHistoryData(await res.json());
+      const [histRes, cmpRes] = await Promise.all([
+        fetch(`/api/predictions/history/${date}`),
+        fetch(`/api/predictions/compare/${date}`),
+      ]);
+      setHistoryData(await histRes.json());
+      setCompareData(await cmpRes.json());
     } catch { /* ignore */ } finally {
       setHistLoading(false);
     }
@@ -1385,7 +1398,7 @@ function NextDayPredictions() {
       {/* ── HISTORY TAB ── */}
       {tab === 'history' && (
         <div className="space-y-4">
-          {/* Accuracy stats */}
+          {/* Overall accuracy stats */}
           {accuracy && accuracy.total > 0 && (
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               {[
@@ -1430,14 +1443,154 @@ function NextDayPredictions() {
             </div>
           )}
 
-          {/* History results */}
           {histLoading && (
             <div className="flex items-center justify-center gap-3 py-10 text-white/30">
               <RefreshCw size={16} className="animate-spin" />
               <span className="text-sm font-bold">Loading history...</span>
             </div>
           )}
-          {!histLoading && historyData && historyData.total > 0 && (
+
+          {/* Smart comparison summary panel */}
+          {!histLoading && compareData && compareData.summary.resolved > 0 && (
+            <div className="rounded-2xl border border-violet-500/20 bg-violet-500/5 p-4 space-y-3">
+              <p className="text-[9px] font-black uppercase tracking-[0.15em] text-violet-400">Smart Comparison — {compareData.date}</p>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {[
+                  {
+                    label: 'Direction Accuracy',
+                    value: compareData.summary.directionAccuracy != null ? `${compareData.summary.directionAccuracy.toFixed(1)}%` : '—',
+                    color: (compareData.summary.directionAccuracy ?? 0) >= 60 ? 'text-emerald-400' : 'text-rose-400',
+                  },
+                  {
+                    label: 'Resolved',
+                    value: `${compareData.summary.resolved}/${compareData.summary.total}`,
+                    color: 'text-white',
+                  },
+                  {
+                    label: 'Avg Price Error',
+                    value: compareData.summary.avgPriceError != null ? `${compareData.summary.avgPriceError.toFixed(2)}%` : '—',
+                    color: (compareData.summary.avgPriceError ?? 99) < 2 ? 'text-emerald-400' : 'text-amber-400',
+                  },
+                  {
+                    label: 'High Conf Accuracy',
+                    value: compareData.summary.highConfAccuracy != null ? `${compareData.summary.highConfAccuracy.toFixed(1)}%` : '—',
+                    color: (compareData.summary.highConfAccuracy ?? 0) >= 65 ? 'text-emerald-400' : 'text-rose-400',
+                  },
+                ].map(k => (
+                  <div key={k.label} className="text-center">
+                    <p className={`text-xl font-black ${k.color}`}>{k.value}</p>
+                    <p className="text-[8px] font-bold uppercase tracking-[0.12em] text-white/30 mt-0.5">{k.label}</p>
+                  </div>
+                ))}
+              </div>
+              {/* Accuracy bar */}
+              {compareData.summary.directionAccuracy != null && (
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[9px] font-bold">
+                    <span className="text-emerald-400">Correct {compareData.summary.correct}</span>
+                    <span className="text-rose-400">Wrong {compareData.summary.resolved - compareData.summary.correct}</span>
+                  </div>
+                  <div className="h-2 rounded-full bg-rose-500/20 overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-emerald-500 transition-all duration-700"
+                      style={{ width: `${compareData.summary.directionAccuracy}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Prediction comparison cards */}
+          {!histLoading && compareData && compareData.predictions.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-[9px] font-black uppercase tracking-[0.15em] text-white/25">
+                {compareData.predictions.length} predictions — click to see signal breakdown
+              </p>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {compareData.predictions.map((p: any, i: number) => {
+                  const isBull = p.prediction === 'Bullish';
+                  const hasActual = p.actual_price != null;
+                  const correct = p.directionCorrect;
+                  const pending = !hasActual;
+                  const priceDelta = p.predicted_price > 0
+                    ? (((p.predicted_price - (p.current_price ?? p.predicted_price)) / (p.current_price ?? p.predicted_price)) * 100)
+                    : 0;
+
+                  let borderCls = 'border-white/5';
+                  let bgCls = 'bg-white/[0.02]';
+                  if (!pending) {
+                    borderCls = correct ? 'border-emerald-500/25' : 'border-rose-500/25';
+                    bgCls = correct ? 'from-emerald-500/5' : 'from-rose-500/5';
+                  }
+
+                  return (
+                    <div key={i} className={`rounded-2xl border ${borderCls} bg-gradient-to-br ${bgCls} to-transparent p-3 space-y-2`}>
+                      {/* Header row */}
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="font-black text-white text-sm">{p.stock_symbol}</span>
+                          <span className={`inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[8px] font-black border ${isBull ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-rose-500/10 border-rose-500/20 text-rose-400'}`}>
+                            {isBull ? <TrendingUp size={8} /> : <TrendingDown size={8} />}
+                            {p.prediction}
+                          </span>
+                          <span className="text-[8px] text-violet-400 font-black">{p.confidence}%</span>
+                        </div>
+                        {pending ? (
+                          <span className="text-[8px] text-white/20 font-bold uppercase tracking-[0.1em]">Pending</span>
+                        ) : (
+                          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[8px] font-black uppercase ${correct ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}`}>
+                            {correct ? '✓ Correct' : '✗ Wrong'}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Price comparison row */}
+                      <div className="flex items-center gap-3 text-[10px]">
+                        <span className="text-white/40">Predicted: <span className={`font-bold ${isBull ? 'text-emerald-400' : 'text-rose-400'}`}>{p.predicted_price?.toFixed(2) ?? '—'}</span></span>
+                        {hasActual && (
+                          <>
+                            <span className="text-white/20">→</span>
+                            <span className="text-white/40">Actual: <span className={`font-bold ${p.actual_change >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{p.actual_price?.toFixed(2)}</span></span>
+                            <span className={`font-black text-[9px] ${p.actual_change >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {p.actual_change >= 0 ? '+' : ''}{p.actual_change?.toFixed(2)}%
+                            </span>
+                          </>
+                        )}
+                      </div>
+
+                      {/* Price error + confidence bar */}
+                      {hasActual && p.priceError != null && (
+                        <div className="flex items-center gap-2 text-[9px]">
+                          <span className="text-white/30">Price Error:</span>
+                          <span className={`font-black ${p.priceError < 2 ? 'text-emerald-400' : p.priceError < 5 ? 'text-amber-400' : 'text-rose-400'}`}>
+                            {p.priceError.toFixed(2)}%
+                          </span>
+                          <div className="flex-1 h-1 rounded-full bg-white/5 overflow-hidden">
+                            <div
+                              className={`h-full rounded-full ${p.priceError < 2 ? 'bg-emerald-500' : p.priceError < 5 ? 'bg-amber-400' : 'bg-rose-500'}`}
+                              style={{ width: `${Math.min(100, p.priceError * 10)}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Confidence bar */}
+                      <div className="h-1 rounded-full bg-white/5 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full ${isBull ? 'bg-emerald-500/60' : 'bg-rose-500/60'}`}
+                          style={{ width: `${p.confidence}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Fallback: plain history table when no compare data */}
+          {!histLoading && historyData && historyData.total > 0 && (!compareData || compareData.predictions.length === 0) && (
             <div className="space-y-3">
               <p className="text-[10px] text-white/30 font-mono">{historyData.total} predictions for {historyData.date}</p>
               <div className="overflow-x-auto rounded-2xl border border-white/5">
@@ -1487,12 +1640,7 @@ function NextDayPredictions() {
             </div>
           )}
         </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Main Tab ─────────────────────────────────────────────────────────────────
+      )}// ─── Main Tab ─────────────────────────────────────────────────────────────────
 
 type PanelId = 'rankings' | 'rally' | 'alerts' | 'news' | 'macro' | 'sectors' | 'predictions';
 

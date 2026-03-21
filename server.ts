@@ -13,6 +13,7 @@ import {
 } from "./serverLogger";
 import { UpstoxService } from "./src/services/upstox/UpstoxService";
 import { UpstoxMarketDataService } from "./src/services/upstox/UpstoxMarketDataService";
+import { PredictionStorageService } from "./src/services/PredictionStorageService";
 
 import path from "path";
 import fs from "fs";
@@ -3974,9 +3975,6 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
     };
   }
 
-  // ── In-memory prediction history (no SQLite) ──
-  const predHistory: Map<string, any[]> = new Map(); // date → predictions[]
-
   // ── Background scan state ──
   let predCache: { data: any; ts: number } | null = null;
   let predRunning = false;
@@ -4011,9 +4009,26 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
       const topBullish = bullish.slice(0, 20);
       const topBearish = bearish.slice(0, 20);
 
-      // Store in memory for history
+      // Persist predictions via PredictionStorageService
       const today = new Date().toISOString().split('T')[0];
-      predHistory.set(today, [...topBullish, ...topBearish]);
+      const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+      const allTop = [...topBullish, ...topBearish];
+      for (const r of allTop) {
+        try {
+          await PredictionStorageService.savePrediction({
+            stock_symbol: r.stock,
+            prediction_date: today,
+            target_date: tomorrow,
+            prediction: r.prediction,
+            confidence: r.confidence,
+            predicted_price: r.predicted_price,
+            signals: { ...r.signals, ATR: r.indicators.atr },
+            explanation: r.explanation,
+          });
+        } catch (e: any) {
+          console.error('[PredictionScan] save error:', e.message);
+        }
+      }
 
       predCache = {
         data: {
@@ -4053,27 +4068,89 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
     });
   });
 
-  app.get("/api/predictions/dates", (req, res) => {
-    const dates = [...predHistory.keys()].sort().reverse();
-    res.json({ dates });
+  app.get("/api/predictions/dates", async (req, res) => {
+    try {
+      const dates = await PredictionStorageService.getAllDatesWithPredictions();
+      res.json({ dates });
+    } catch (e: any) {
+      res.json({ dates: [] });
+    }
   });
 
-  app.get("/api/predictions/history/:date", (req, res) => {
-    const preds = predHistory.get(req.params.date) || [];
-    res.json({
-      date: req.params.date,
-      bullish: preds.filter((p: any) => p.prediction === 'Bullish'),
-      bearish: preds.filter((p: any) => p.prediction === 'Bearish'),
-      total: preds.length,
-    });
+  app.get("/api/predictions/history/:date", async (req, res) => {
+    try {
+      const preds = await PredictionStorageService.getPredictionsByDate(req.params.date);
+      res.json({
+        date: req.params.date,
+        bullish: preds.filter((p: any) => p.prediction === 'Bullish'),
+        bearish: preds.filter((p: any) => p.prediction === 'Bearish'),
+        total: preds.length,
+      });
+    } catch (e: any) {
+      res.json({ date: req.params.date, bullish: [], bearish: [], total: 0 });
+    }
   });
 
-  app.get("/api/predictions/accuracy", (req, res) => {
-    res.json({ total: 0, correct: 0, accuracy: 0, avgConfidence: 0 });
+  app.get("/api/predictions/accuracy", async (req, res) => {
+    try {
+      const stats = await PredictionStorageService.getAccuracyStats();
+      res.json(stats);
+    } catch (e: any) {
+      res.json({ total: 0, correct: 0, accuracy: 0, avgConfidence: 0 });
+    }
   });
 
-  app.post("/api/predictions/update-actual", express.json(), (req, res) => {
-    res.json({ success: true });
+  // Smart comparison: for a given date, compute predicted vs actual direction + price error
+  app.get("/api/predictions/compare/:date", async (req, res) => {
+    try {
+      const preds = await PredictionStorageService.getPredictionsByDate(req.params.date);
+      const compared = preds.map((p: any) => {
+        const hasActual = p.actual_price != null && p.actual_change != null;
+        const directionCorrect = hasActual
+          ? (p.prediction === 'Bullish' && p.actual_change > 0) || (p.prediction === 'Bearish' && p.actual_change < 0)
+          : null;
+        const priceError = hasActual && p.predicted_price > 0
+          ? Math.abs((p.actual_price - p.predicted_price) / p.predicted_price) * 100
+          : null;
+        return { ...p, directionCorrect, priceError };
+      });
+
+      const resolved = compared.filter((p: any) => p.actual_price != null);
+      const correct = resolved.filter((p: any) => p.directionCorrect).length;
+      const avgPriceError = resolved.length > 0
+        ? resolved.reduce((s: number, p: any) => s + (p.priceError ?? 0), 0) / resolved.length
+        : null;
+      const highConfCorrect = resolved.filter((p: any) => p.confidence >= 75 && p.directionCorrect).length;
+      const highConfTotal = resolved.filter((p: any) => p.confidence >= 75).length;
+
+      res.json({
+        date: req.params.date,
+        predictions: compared,
+        summary: {
+          total: preds.length,
+          resolved: resolved.length,
+          correct,
+          directionAccuracy: resolved.length > 0 ? (correct / resolved.length) * 100 : null,
+          avgPriceError,
+          highConfAccuracy: highConfTotal > 0 ? (highConfCorrect / highConfTotal) * 100 : null,
+        },
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/predictions/update-actual", express.json(), async (req, res) => {
+    try {
+      const { id, actual_price, actual_change } = req.body;
+      if (!id || actual_price == null || actual_change == null) {
+        return res.status(400).json({ error: 'id, actual_price, actual_change required' });
+      }
+      await PredictionStorageService.updateActualPrice(id, actual_price, actual_change);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // END NEXT-DAY PREDICTION ENGINE
