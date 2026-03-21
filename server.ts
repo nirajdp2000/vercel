@@ -4133,58 +4133,62 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
       };
       console.log(`[PredictionScan] Done — ${universe.length} stocks, ${bullish.length} bullish, ${bearish.length} bearish`);
 
-      // Persist predictions async — atomic batch: delete all for today then insert all 40
+      // Persist predictions — await so Vercel serverless doesn't kill it before it completes
       const today = new Date().toISOString().split('T')[0];
       const allTop = [...topBullish, ...topBearish];
-      (async () => {
-        try {
-          await PredictionStorageService.saveAllPredictions(today, allTop.map(r => ({
-            stock_symbol: r.stock,
-            prediction_date: today,
-            target_date: today,
-            prediction: r.prediction,
-            confidence: r.confidence,
-            predicted_price: r.predicted_price,
-            signals: {
-              RSI: r.signals.RSI, MACD: r.signals.MACD,
-              Volume: r.signals.Volume, Trend: r.signals.Trend,
-              Sentiment: r.signals.Sentiment, Bollinger: r.signals.Bollinger,
-              Stochastic: r.signals.Stochastic, Acceleration: r.signals.Acceleration,
-              ATR: r.indicators.atr, current_price: r.current_price, sector: r.sector,
-            } as any,
-            explanation: r.explanation,
-          })));
-          console.log(`[PredictionScan] Persisted ${allTop.length} predictions for ${today}`);
-        } catch (e: any) {
-          console.error('[PredictionScan] persist error:', e.message);
-        }
-      })();
+      try {
+        await PredictionStorageService.saveAllPredictions(today, allTop.map(r => ({
+          stock_symbol: r.stock,
+          prediction_date: today,
+          target_date: today,
+          prediction: r.prediction,
+          confidence: r.confidence,
+          predicted_price: r.predicted_price,
+          signals: {
+            RSI: r.signals.RSI, MACD: r.signals.MACD,
+            Volume: r.signals.Volume, Trend: r.signals.Trend,
+            Sentiment: r.signals.Sentiment, Bollinger: r.signals.Bollinger,
+            Stochastic: r.signals.Stochastic, Acceleration: r.signals.Acceleration,
+            ATR: r.indicators.atr, current_price: r.current_price, sector: r.sector,
+          } as any,
+          explanation: r.explanation,
+        })));
+        console.log(`[PredictionScan] Persisted ${allTop.length} predictions for ${today}`);
+      } catch (e: any) {
+        console.error('[PredictionScan] persist error:', e.message);
+      }
     } finally {
       predRunning = false;
     }
   }
 
-  // Auto-scan 30s after startup
-  setTimeout(() => runPredictionScan().catch(e => console.error('[PredictionScan]', e)), 30_000);
-
-  app.get("/api/predictions/run", (req, res) => {
+  app.get("/api/predictions/run", async (req, res) => {
     const now = Date.now();
     const refresh = req.query.refresh === 'true';
 
+    // Fresh cache — return immediately
     if (!refresh && predCache && (now - predCache.ts) < PRED_CACHE_TTL) {
       return res.json(predCache.data);
     }
 
-    if (!predRunning) runPredictionScan().catch(e => console.error('[PredictionScan]', e));
+    // No cache at all — must await the full scan so Vercel doesn't kill it before save completes
+    if (!predCache) {
+      if (!predRunning) await runPredictionScan().catch(e => console.error('[PredictionScan]', e));
+      if (predCache) return res.json(predCache.data);
+      return res.json({
+        computing: true,
+        message: 'Scanning universe — ready in ~15s. Click Refresh.',
+        bullish: [], bearish: [], totalScanned: 0, bullishCount: 0, bearishCount: 0,
+        generatedAt: new Date().toISOString(),
+      });
+    }
 
-    if (predCache) return res.json({ ...predCache.data, stale: true });
-
-    return res.json({
-      computing: true,
-      message: 'Scanning universe — ready in ~15s. Click Refresh.',
-      bullish: [], bearish: [], totalScanned: 0, bullishCount: 0, bearishCount: 0,
-      generatedAt: new Date().toISOString(),
-    });
+    // Stale cache — return stale data immediately, kick off background refresh
+    // (Vercel: scan + save will complete because we await before this handler returns)
+    if (!predRunning) {
+      runPredictionScan().catch(e => console.error('[PredictionScan]', e));
+    }
+    return res.json({ ...predCache.data, stale: true });
   });
 
   app.get("/api/predictions/dates", async (req, res) => {
