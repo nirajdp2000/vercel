@@ -771,184 +771,180 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#0A0A0B] text-zinc-100 font-sans selection:bg-indigo-500/30 overflow-x-hidden">
       {/* Market Ticker */}
-      <div className="bg-indigo-600/10 border-b border-white/5 py-1.5 overflow-hidden whitespace-nowrap">
-        <div className="flex animate-marquee gap-12 items-center">
-          {tickerItems.map((item, i) => (
-            <div key={i} className="flex items-center gap-2 text-[10px] font-bold tracking-wider">
-              <span className="text-zinc-400">{item.s}</span>
-              <span className="text-white">{item.v}</span>
-              <span className={item.c.startsWith('+') ? "text-emerald-400" : item.c.startsWith('-') ? "text-rose-400" : "text-zinc-500"}>{item.c}</span>
-            </div>
-          ))}
-          {/* Duplicate for seamless loop */}
-          {tickerItems.map((item, i) => (
-            <div key={`dup-${i}`} className="flex items-center gap-2 text-[10px] font-bold tracking-wider">
-              <span className="text-zinc-400">{item.s}</span>
-              <span className="text-white">{item.v}</span>
-              <span className={item.c.startsWith('+') ? "text-emerald-400" : item.c.startsWith('-') ? "text-rose-400" : "text-zinc-500"}>{item.c}</span>
+      <div className="bg-black/40 border-b border-white/[0.05] py-0 overflow-hidden whitespace-nowrap h-8 flex items-center relative">
+        {/* left fade */}
+        <div className="absolute left-0 top-0 bottom-0 w-16 bg-gradient-to-r from-black/80 to-transparent z-10 pointer-events-none" />
+        {/* right fade */}
+        <div className="absolute right-0 top-0 bottom-0 w-16 bg-gradient-to-l from-black/80 to-transparent z-10 pointer-events-none" />
+        {/* live dot */}
+        <div className="absolute left-3 z-20 flex items-center gap-1.5">
+          <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.9)] animate-pulse" />
+          <span className="text-[8px] font-black text-emerald-400/70 uppercase tracking-widest">Live</span>
+        </div>
+        <div className="flex animate-marquee gap-10 items-center pl-20">
+          {[...tickerItems, ...tickerItems].map((item, i) => (
+            <div key={i} className="flex items-center gap-2 text-[10px] font-bold tracking-wider shrink-0">
+              <span className="text-zinc-500 font-semibold">{item.s}</span>
+              <span className="text-white font-bold tabular-nums">{item.v}</span>
+              <span className={cn(
+                "font-bold tabular-nums",
+                item.c.startsWith('+') ? "text-emerald-400" : item.c.startsWith('-') ? "text-rose-400" : "text-zinc-500"
+              )}>
+                {item.c.startsWith('+') ? '▲' : item.c.startsWith('-') ? '▼' : ''} {item.c}
+              </span>
+              <span className="text-white/10">│</span>
             </div>
           ))}
         </div>
       </div>
 
-      {/* AI News Ticker */}
-      {aiNewsFeed.length > 0 && (
-        <div className="bg-indigo-500/10 border-b border-indigo-500/20 py-2 overflow-hidden whitespace-nowrap">
-          <div className="animate-marquee inline-block">
-            {aiNewsFeed.map((item, idx) => (
-              <span key={idx} className="mx-8 text-[10px] font-bold text-indigo-400 uppercase tracking-widest flex items-center gap-2 inline-flex">
-                <Sparkles className="w-3 h-3" />
-                <span className="text-zinc-500 mr-2">[{item.time}]</span>
-                {item.text}
-              </span>
-            ))}
-            {/* Duplicate for seamless loop */}
-            {aiNewsFeed.map((item, idx) => (
-              <span key={`dup-${idx}`} className="mx-8 text-[10px] font-bold text-indigo-400 uppercase tracking-widest flex items-center gap-2 inline-flex">
-                <Sparkles className="w-3 h-3" />
-                <span className="text-zinc-500 mr-2">[{item.time}]</span>
-                {item.text}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Top Picks Banner */}
-      {marketIntelligence?.topTradeIdeas && (
-        <div className="bg-indigo-600 border-b border-indigo-500 py-2.5 px-4 overflow-hidden relative group">
-          <div className="max-w-7xl mx-auto flex items-center justify-between">
-            <div className="flex items-center gap-4 animate-pulse-slow">
-              <div className="bg-white/20 p-1 rounded-md">
-                <Sparkles className="w-3.5 h-3.5 text-white" />
-              </div>
-              <p className="text-[11px] font-bold text-white uppercase tracking-widest flex items-center gap-2">
-                Top AI Pick: <span className="text-indigo-100">{cleanSymbol(marketIntelligence.topTradeIdeas[0].symbol)}</span>
-                <span className="bg-emerald-400 text-indigo-900 px-1.5 py-0.5 rounded text-[9px] font-black">BUY</span>
-              </p>
-              <p className="hidden md:block text-[10px] text-indigo-200 font-medium italic">
-                "{marketIntelligence.topTradeIdeas[0].setup}" - Target: {formatCurrency(marketIntelligence.topTradeIdeas[0].target)}
-              </p>
-            </div>
-            <button 
-              onClick={() => {
-                const stock = POPULAR_STOCKS.find(s => s.symbol === marketIntelligence.topTradeIdeas[0].symbol) || null;
-                setSelectedStock(stock);
-                setQuery(marketIntelligence.topTradeIdeas[0].symbol);
-                if (stock) {
-                  fetchData(stock);
-                }
-              }}
-              className="text-[10px] font-black text-white uppercase tracking-tighter hover:underline flex items-center gap-1"
-            >
-              Analyze Now <ChevronDown className="w-3 h-3 -rotate-90" />
-            </button>
-          </div>
-          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
-        </div>
-      )}
-
       {/* Header */}
-      <header className="border-b border-white/[0.06] bg-black/60 backdrop-blur-2xl sticky top-0 z-50 shadow-[0_1px_0_rgba(255,255,255,0.04),0_4px_32px_rgba(0,0,0,0.6)]">
-        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-gradient-to-br from-indigo-500 via-violet-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/30 ring-1 ring-white/10">
-              <TrendingUp className="text-white w-5 h-5" />
+      <header className="sticky top-0 z-50 border-b border-white/[0.06] bg-[#0a0a0c]/80 backdrop-blur-2xl shadow-[0_8px_40px_rgba(0,0,0,0.7)]">
+        {/* subtle top glow line */}
+        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-indigo-500/50 to-transparent" />
+
+        <div className="max-w-[1600px] mx-auto px-5 h-[68px] flex items-center gap-6">
+
+          {/* ── Logo ── */}
+          <div className="flex items-center gap-3 shrink-0">
+            <div className="relative w-10 h-10">
+              <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-purple-600 shadow-[0_0_20px_rgba(99,102,241,0.5)]" />
+              <div className="absolute inset-0 rounded-2xl flex items-center justify-center">
+                <TrendingUp className="text-white w-5 h-5 drop-shadow" />
+              </div>
+              {/* pulse ring */}
+              <div className="absolute -inset-0.5 rounded-2xl border border-indigo-400/30 animate-pulse" />
             </div>
             <div>
-              <h1 className="text-lg font-black tracking-tight leading-none bg-gradient-to-r from-white to-white/70 bg-clip-text text-transparent">StockPulse</h1>
-              <p className="text-[9px] text-indigo-400/60 font-bold uppercase tracking-[0.2em] mt-0.5">Premium Terminal</p>
+              <h1 className="text-[17px] font-black tracking-tight leading-none bg-gradient-to-r from-white via-white/90 to-indigo-200 bg-clip-text text-transparent">
+                StockPulse
+              </h1>
+              <p className="text-[8px] text-indigo-400/50 font-bold uppercase tracking-[0.25em] mt-0.5">Premium Terminal</p>
             </div>
-          </div>
-          
-          <div className="hidden md:flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-zinc-500">
-            {[
-              { id: 'analytics',     label: 'Analytics',      badge: null,  badgeStyle: '' },
-              { id: 'institutional', label: 'Institutional',  badge: 'PRO', badgeStyle: 'bg-violet-500 text-white' },
-              { id: 'ultraQuant',    label: 'Ultra Quant',    badge: 'AI',  badgeStyle: 'bg-cyan-400 text-slate-950' },
-              { id: 'multibagger',   label: 'Multibagger',    badge: 'NEW', badgeStyle: 'bg-violet-400 text-slate-950' },
-              { id: 'aiIntelligence',label: 'AI Intelligence',badge: 'AI',  badgeStyle: 'bg-gradient-to-r from-violet-500 to-cyan-500 text-white' },
-            ].map(({ id, label, badge, badgeStyle }) => (
-              <button key={id}
-                onClick={() => setActiveTab(id as any)}
-                className={cn(
-                  "relative flex items-center gap-1.5 px-4 py-2 rounded-xl text-[11px] font-bold uppercase tracking-wider transition-all duration-200",
-                  activeTab === id
-                    ? "bg-white/[0.08] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
-                    : "text-zinc-500 hover:text-zinc-200 hover:bg-white/[0.04]"
-                )}
-              >
-                {label}
-                {badge && (
-                  <span className={cn("text-[7px] font-black px-1 py-0.5 rounded leading-none", badgeStyle)}>
-                    {badge}
-                  </span>
-                )}
-                {activeTab === id && (
-                  <span className="absolute bottom-0 left-3 right-3 h-0.5 rounded-full bg-gradient-to-r from-indigo-500 to-violet-500" />
-                )}
-              </button>
-            ))}
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="hidden sm:flex flex-col items-end">
-              <span className="text-xs font-bold text-white/80">Premium Account</span>
-              <div className="text-[10px] text-emerald-400 flex items-center gap-1">
-                <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_6px_rgba(52,211,153,0.8)]" /> Live Market
+          {/* ── Divider ── */}
+          <div className="hidden md:block h-8 w-px bg-white/[0.07] shrink-0" />
+
+          {/* ── Desktop Tabs ── */}
+          <nav className="hidden md:flex items-center gap-1 flex-1">
+            {[
+              { id: 'analytics',      label: 'Analytics',       icon: '📊', badge: null,  badgeStyle: '' },
+              { id: 'institutional',  label: 'Institutional',   icon: '🏦', badge: 'PRO', badgeStyle: 'bg-violet-500/90 text-white' },
+              { id: 'ultraQuant',     label: 'Ultra Quant',     icon: '⚡', badge: 'AI',  badgeStyle: 'bg-cyan-400 text-slate-950' },
+              { id: 'multibagger',    label: 'Multibagger',     icon: '🚀', badge: 'NEW', badgeStyle: 'bg-amber-400 text-slate-950' },
+              { id: 'aiIntelligence', label: 'AI Intelligence', icon: '🤖', badge: 'AI',  badgeStyle: 'bg-gradient-to-r from-violet-500 to-cyan-500 text-white' },
+            ].map(({ id, label, icon, badge, badgeStyle }) => {
+              const isActive = activeTab === id;
+              return (
+                <button
+                  key={id}
+                  onClick={() => setActiveTab(id as any)}
+                  className={cn(
+                    "relative flex items-center gap-2 px-4 py-2.5 rounded-xl text-[11px] font-bold uppercase tracking-wider transition-all duration-200 group",
+                    isActive
+                      ? "bg-white/[0.09] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.1),0_0_20px_rgba(99,102,241,0.15)]"
+                      : "text-zinc-500 hover:text-zinc-200 hover:bg-white/[0.05]"
+                  )}
+                >
+                  {/* icon */}
+                  <span className={cn("text-sm transition-transform duration-200", isActive ? "scale-110" : "group-hover:scale-105")}>
+                    {icon}
+                  </span>
+                  {label}
+                  {badge && (
+                    <span className={cn("text-[7px] font-black px-1.5 py-0.5 rounded-md leading-none", badgeStyle)}>
+                      {badge}
+                    </span>
+                  )}
+                  {/* active underline glow */}
+                  {isActive && (
+                    <span className="absolute bottom-0 left-4 right-4 h-[2px] rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-purple-500 shadow-[0_0_8px_rgba(99,102,241,0.8)]" />
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+
+          {/* ── Right Controls ── */}
+          <div className="flex items-center gap-2.5 ml-auto shrink-0">
+
+            {/* Live status pill */}
+            <div className="hidden lg:flex flex-col items-end">
+              <span className="text-[11px] font-bold text-white/70 leading-none">Premium Account</span>
+              <div className="flex items-center gap-1 mt-0.5">
+                <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_6px_rgba(52,211,153,0.9)]" />
+                <span className="text-[9px] text-emerald-400 font-bold tracking-wide">Live Market</span>
               </div>
             </div>
-            {/* Upstox Connection Button */}
+
+            {/* Divider */}
+            <div className="hidden lg:block h-7 w-px bg-white/[0.07]" />
+
+            {/* Upstox button */}
             <a
               href="/upstox/connect"
               target="_blank"
               rel="noopener noreferrer"
               className={cn(
-                "hidden sm:flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[9px] font-black uppercase tracking-[0.18em] transition-all",
+                "hidden sm:flex h-8 items-center gap-2 rounded-xl border px-3 text-[9px] font-black uppercase tracking-[0.15em] transition-all duration-200",
                 upstoxConnected === true
-                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20"
+                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 hover:border-emerald-500/60 shadow-[0_0_12px_rgba(16,185,129,0.1)]"
                   : upstoxConnected === false
                   ? "border-rose-500/40 bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 animate-pulse"
                   : "border-white/10 bg-white/5 text-zinc-400"
               )}
             >
               <div className={cn(
-                "w-1.5 h-1.5 rounded-full",
-                upstoxConnected === true ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]" :
+                "w-1.5 h-1.5 rounded-full shrink-0",
+                upstoxConnected === true ? "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.9)]" :
                 upstoxConnected === false ? "bg-rose-500" : "bg-zinc-600"
               )} />
-              {upstoxConnected === true ? "Upstox Live" : upstoxConnected === false ? "Connect Upstox" : "Upstox..."}
+              {upstoxConnected === true ? "Upstox Live" : upstoxConnected === false ? "Connect" : "Upstox..."}
             </a>
+
+            {/* Theme toggle */}
             <button
               type="button"
-              onClick={() => setDeskTheme((current) => current === 'dark' ? 'light' : 'dark')}
-              className="hidden sm:flex h-9 items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 text-[10px] font-black uppercase tracking-[0.18em] text-zinc-300 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
+              onClick={() => setDeskTheme(c => c === 'dark' ? 'light' : 'dark')}
+              className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.04] text-zinc-400 transition-all hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
+              title="Toggle theme"
             >
-              {deskTheme === 'dark' ? <SunMedium className="w-4 h-4 text-amber-300" /> : <MoonStar className="w-4 h-4 text-cyan-300" />}
-              Desk
+              {deskTheme === 'dark'
+                ? <SunMedium className="w-4 h-4 text-amber-300" />
+                : <MoonStar className="w-4 h-4 text-cyan-300" />}
             </button>
-            <div className="h-9 w-9 rounded-xl bg-white/[0.04] border border-white/[0.08] flex items-center justify-center hover:bg-white/[0.08] transition cursor-pointer">
-              <Maximize2 className="w-4 h-4 text-zinc-400" />
-            </div>
+
+            {/* Fullscreen */}
+            <button
+              type="button"
+              onClick={() => document.documentElement.requestFullscreen?.()}
+              className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.04] text-zinc-400 transition-all hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
+              title="Fullscreen"
+            >
+              <Maximize2 className="w-4 h-4" />
+            </button>
           </div>
         </div>
 
-        {/* Mobile Navigation Tabs */}
-        <div className="md:hidden flex overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] items-center gap-1 px-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 border-t border-white/[0.04] bg-black/30">
+        {/* ── Mobile Tabs ── */}
+        <div className="md:hidden flex overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] items-center gap-0.5 px-3 border-t border-white/[0.05] bg-black/30">
           {[
-            { id: 'analytics',     label: 'Analytics',       badge: null,  badgeStyle: '' },
-            { id: 'institutional', label: 'Institutional',   badge: 'PRO', badgeStyle: 'bg-violet-500 text-white' },
-            { id: 'ultraQuant',    label: 'Ultra Quant',     badge: 'AI',  badgeStyle: 'bg-cyan-400 text-slate-950' },
-            { id: 'multibagger',   label: 'Multibagger',     badge: 'NEW', badgeStyle: 'bg-violet-400 text-slate-950' },
-            { id: 'aiIntelligence',label: 'AI Intelligence', badge: 'AI',  badgeStyle: 'bg-gradient-to-r from-violet-500 to-cyan-500 text-white' },
-          ].map(({ id, label, badge, badgeStyle }) => (
-            <button key={id}
+            { id: 'analytics',      label: 'Analytics',       icon: '📊', badge: null,  badgeStyle: '' },
+            { id: 'institutional',  label: 'Institutional',   icon: '🏦', badge: 'PRO', badgeStyle: 'bg-violet-500 text-white' },
+            { id: 'ultraQuant',     label: 'Ultra Quant',     icon: '⚡', badge: 'AI',  badgeStyle: 'bg-cyan-400 text-slate-950' },
+            { id: 'multibagger',    label: 'Multibagger',     icon: '🚀', badge: 'NEW', badgeStyle: 'bg-amber-400 text-slate-950' },
+            { id: 'aiIntelligence', label: 'AI',              icon: '🤖', badge: 'AI',  badgeStyle: 'bg-gradient-to-r from-violet-500 to-cyan-500 text-white' },
+          ].map(({ id, label, icon, badge, badgeStyle }) => (
+            <button
+              key={id}
               onClick={() => setActiveTab(id as any)}
               className={cn(
-                "relative flex items-center gap-1 py-3 px-3 whitespace-nowrap text-[10px] font-bold uppercase tracking-wider transition-all border-b-2 flex-shrink-0",
+                "relative flex items-center gap-1.5 py-2.5 px-3 whitespace-nowrap text-[10px] font-bold uppercase tracking-wider transition-all border-b-2 flex-shrink-0",
                 activeTab === id ? "text-white border-indigo-400" : "text-zinc-500 border-transparent hover:text-zinc-300"
               )}
             >
+              <span className="text-xs">{icon}</span>
               {label}
               {badge && (
                 <span className={cn("text-[7px] font-black px-1 py-0.5 rounded leading-none", badgeStyle)}>
