@@ -1,1 +1,1 @@
-fix: getUniverseAsync always awaits init, eager load on serverless cold start
+fix: correct Supabase column name avg_volume (was average_volume) - loads 5221 stocks

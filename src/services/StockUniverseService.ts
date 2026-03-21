@@ -84,7 +84,7 @@ async function _loadUniverse(): Promise<void> {
     while (!done) {
       const { data, error } = await supabase
         .from('stock_universe')
-        .select('symbol,name,exchange,sector,industry,market_cap,average_volume,instrument_key')
+        .select('symbol,name,exchange,sector,industry,market_cap,avg_volume,instrument_key')
         .range(from, from + PAGE_SIZE - 1);
 
       if (error) {
@@ -109,7 +109,7 @@ async function _loadUniverse(): Promise<void> {
         sector:        row.sector || 'Unknown',
         industry:      row.industry || 'Unknown',
         marketCap:     Number(row.market_cap) || 1000,
-        averageVolume: Number(row.average_volume) || 100000,
+        averageVolume: Number(row.avg_volume) || 100000,
         instrumentKey: row.instrument_key || `NSE_EQ|${row.symbol}`,
       }));
       console.log(`[StockUniverseService] Loaded ${_universe.length} stocks from Supabase`);
