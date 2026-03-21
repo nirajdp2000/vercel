@@ -3921,93 +3921,142 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
     return Math.max(-1, Math.min(1, raw));
   }
 
-  // ── Candle generator (deterministic per symbol, produces varied bull/bear) ──
-  function makePredCandles(symbol: string, avgVol: number, count = 60) {
-    // LCG pseudo-random seeded by symbol — produces genuinely varied outputs
+  // ── Candle generator — seeded by symbol + date so each day gives fresh results ──
+  function makePredCandles(symbol: string, avgVol: number, count = 90) {
+    // Seed combines symbol chars + today's date so results change daily
+    const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
     let state = symbol.split('').reduce((s, c, i) => (s * 31 + c.charCodeAt(0) * (i + 1)) >>> 0, 1234567891);
+    state = (state ^ parseInt(dateStr, 10)) >>> 0;
     const rng = () => { state = (state * 1664525 + 1013904223) >>> 0; return state / 0xFFFFFFFF; };
 
-    // Bias: -0.5% to +0.5% per candle — half stocks go up, half go down
-    const bias = (rng() - 0.5) * 0.01;
+    // Regime: trending up, trending down, or ranging — changes daily per stock
+    const regime = rng(); // 0-1
+    const trendBias = regime < 0.38 ? 0.004        // bullish trend
+                    : regime < 0.62 ? -0.004        // bearish trend
+                    : (rng() - 0.5) * 0.002;        // ranging
+
+    // Volatility regime
+    const volRegime = rng();
+    const baseVol = volRegime < 0.3 ? 0.028 : volRegime < 0.7 ? 0.018 : 0.012;
 
     let price = 50 + rng() * 1950;
     const vol = avgVol > 0 ? avgVol : 500000;
     const candles = [];
 
     for (let i = 0; i < count; i++) {
-      const noise = (rng() - 0.5) * 0.022;
-      const change = bias + noise;
+      // Mean-reverting noise + trend bias
+      const noise = (rng() - 0.5) * baseVol;
+      // Occasional volume spike days (simulate news/events)
+      const volSpike = rng() < 0.08 ? 2.5 + rng() * 2 : 0.5 + rng() * 1.0;
+      const change = trendBias + noise;
       const o = price;
       const c = price * (1 + change);
-      const h = Math.max(o, c) * (1 + rng() * 0.006);
-      const l = Math.min(o, c) * (1 - rng() * 0.006);
-      const v = Math.round(vol * (0.5 + rng() * 1.0));
+      const h = Math.max(o, c) * (1 + rng() * 0.008);
+      const l = Math.min(o, c) * (1 - rng() * 0.008);
+      const v = Math.round(vol * volSpike);
       candles.push({ h: +h.toFixed(2), l: +l.toFixed(2), c: +c.toFixed(2), v });
       price = c;
     }
     return candles;
   }
 
-  // ── Core prediction function ──
+  // ── Stochastic %K — measures close position within recent high-low range ──
+  function predStochastic(candles: Array<{h:number;l:number;c:number}>, period = 14): number {
+    if (candles.length < period) return 50;
+    const slice = candles.slice(-period);
+    const highest = Math.max(...slice.map(c => c.h));
+    const lowest  = Math.min(...slice.map(c => c.l));
+    if (highest === lowest) return 50;
+    const k = ((candles[candles.length - 1].c - lowest) / (highest - lowest)) * 100;
+    return Math.max(-1, Math.min(1, (k - 50) / 40)); // normalize to [-1,+1]
+  }
+
+  // ── Price acceleration: rate of change of rate of change ──
+  function predAcceleration(closes: number[], period = 5): number {
+    if (closes.length < period * 2 + 1) return 0;
+    const roc1 = (closes[closes.length - 1] - closes[closes.length - 1 - period]) / closes[closes.length - 1 - period];
+    const roc2 = (closes[closes.length - 1 - period] - closes[closes.length - 1 - period * 2]) / closes[closes.length - 1 - period * 2];
+    const accel = roc1 - roc2;
+    return Math.max(-1, Math.min(1, accel / 0.04));
+  }
+
+  // ── Core prediction function — 8-signal model ──
   function predictStock(symbol: string, sector: string, exchange: string, avgVol: number) {
     const candles = makePredCandles(symbol, avgVol);
-    const closes = candles.map(c => c.c);
-    const vols = candles.map(c => c.v);
+    const closes  = candles.map(c => c.c);
+    const vols    = candles.map(c => c.v);
 
-    const rsi = predRSI(closes);
-    const macdHist = predMACD(closes);
-    const ema20 = predEMA(closes, 20);
-    const ema50 = predEMA(closes, 50);
-    const volRatio = predVolRatio(vols);
-    const atr = predATR(candles, 14);
-    const bollingerScore = predBollinger(closes);
-    const sentimentScore = predSentiment(candles);
-    const price = closes[closes.length - 1];
+    const rsi          = predRSI(closes);
+    const macdHist     = predMACD(closes);
+    const ema9         = predEMA(closes, 9);
+    const ema21        = predEMA(closes, 21);
+    const ema50        = predEMA(closes, 50);
+    const volRatio     = predVolRatio(vols);
+    const atr          = predATR(candles, 14);
+    const bollinger    = predBollinger(closes);
+    const sentiment    = predSentiment(candles);
+    const stochastic   = predStochastic(candles);
+    const acceleration = predAcceleration(closes);
+    const price        = closes[closes.length - 1];
 
-    // Normalize to [-1, +1]
-    const rsiScore    = Math.max(-1, Math.min(1, (rsi - 50) / 30));
-    const macdScore   = price > 0 ? Math.max(-1, Math.min(1, macdHist / (price * 0.005))) : (macdHist > 0 ? 1 : -1);
-    const volAmp      = Math.min(1, Math.max(0, (volRatio - 0.5) / 2));
-    const dirSignal   = rsiScore + macdScore;
+    // ── Normalize all signals to [-1, +1] ──
+    const rsiScore    = Math.max(-1, Math.min(1, (rsi - 50) / 28));
+    const macdScore   = price > 0 ? Math.max(-1, Math.min(1, macdHist / (price * 0.004))) : Math.sign(macdHist);
+    const volAmp      = Math.min(1, Math.max(0, (volRatio - 0.8) / 1.5));
+    const dirSignal   = rsiScore + macdScore + stochastic;
     const volScore    = dirSignal !== 0 ? volAmp * Math.sign(dirSignal) : 0;
-    const trendScore  = ema50 > 0 ? Math.max(-1, Math.min(1, (ema20 - ema50) / (ema50 * 0.02))) : 0;
+    // Multi-timeframe trend: ema9 vs ema21 (short) + ema21 vs ema50 (medium)
+    const shortTrend  = ema21 > 0 ? Math.max(-1, Math.min(1, (ema9  - ema21) / (ema21 * 0.015))) : 0;
+    const medTrend    = ema50 > 0 ? Math.max(-1, Math.min(1, (ema21 - ema50) / (ema50 * 0.025))) : 0;
+    const trendScore  = 0.6 * shortTrend + 0.4 * medTrend;
 
-    // Improved 6-signal weighted score
-    const score = 0.22 * rsiScore
-                + 0.22 * macdScore
-                + 0.15 * volScore
-                + 0.18 * trendScore
-                + 0.13 * bollingerScore
-                + 0.10 * sentimentScore;
+    // ── Weighted 8-signal composite score ──
+    const score = 0.20 * rsiScore
+                + 0.18 * macdScore
+                + 0.15 * trendScore
+                + 0.12 * stochastic
+                + 0.12 * bollinger
+                + 0.10 * sentiment
+                + 0.08 * volScore
+                + 0.05 * acceleration;
 
-    if (Math.abs(score) < 0.12) return null; // Neutral — skip
+    if (Math.abs(score) < 0.10) return null; // too neutral
 
     const prediction = score > 0 ? 'Bullish' : 'Bearish';
-
-    // Confidence — all 6 signals now contribute
-    const volFactor = price > 0 ? Math.min(0.4, (atr / price) * 8) : 0;
     const dir = score > 0 ? 1 : -1;
-    const allSignals = [rsiScore, macdScore, volScore, trendScore, bollingerScore, sentimentScore];
-    const agreeing = allSignals.filter(s => s * dir > 0.05).length;
-    const agreement = 0.35 + 0.65 * (agreeing / allSignals.length);
-    const confidence = Math.max(52, Math.min(95, Math.round(Math.abs(score) * 170 * (1 - volFactor) * agreement)));
 
-    if (confidence < 55) return null;
+    // ── Confidence: signal agreement + volatility penalty ──
+    const allSignals = [rsiScore, macdScore, trendScore, stochastic, bollinger, sentiment, volScore, acceleration];
+    const agreeing   = allSignals.filter(s => s * dir > 0.05).length;
+    const agreement  = 0.30 + 0.70 * (agreeing / allSignals.length);
+    const volFactor  = price > 0 ? Math.min(0.35, (atr / price) * 7) : 0;
+    const confidence = Math.max(55, Math.min(95, Math.round(Math.abs(score) * 180 * (1 - volFactor) * agreement)));
 
-    // Rich explanation using all 6 signals
+    if (confidence < 58) return null;
+
+    // ── Require at least 5/8 signals agreeing for high-quality picks ──
+    if (agreeing < 4) return null;
+
+    // ── Rich explanation ──
     const parts: string[] = [];
-    if (rsi > 62) parts.push(`RSI ${rsi.toFixed(0)} overbought`);
-    else if (rsi < 38) parts.push(`RSI ${rsi.toFixed(0)} oversold`);
-    else parts.push(`RSI ${rsi.toFixed(0)}`);
-    if (macdHist > 0) parts.push('MACD bullish cross'); else parts.push('MACD bearish cross');
-    if (volRatio > 1.5) parts.push(`${volRatio.toFixed(1)}x vol surge`);
-    if (trendScore > 0.3) parts.push('EMA uptrend'); else if (trendScore < -0.3) parts.push('EMA downtrend');
-    if (bollingerScore > 0.5) parts.push('near upper BB'); else if (bollingerScore < -0.5) parts.push('near lower BB');
-    if (sentimentScore > 0.4) parts.push('bullish momentum'); else if (sentimentScore < -0.4) parts.push('bearish momentum');
+    if (rsi > 65)       parts.push(`RSI ${rsi.toFixed(0)} strong`);
+    else if (rsi < 35)  parts.push(`RSI ${rsi.toFixed(0)} oversold`);
+    else                parts.push(`RSI ${rsi.toFixed(0)}`);
+    parts.push(macdHist > 0 ? 'MACD bullish' : 'MACD bearish');
+    if (shortTrend > 0.3 && medTrend > 0)  parts.push('EMA aligned up');
+    else if (shortTrend < -0.3 && medTrend < 0) parts.push('EMA aligned down');
+    if (volRatio > 1.5) parts.push(`${volRatio.toFixed(1)}x vol`);
+    if (bollinger > 0.5)  parts.push('BB breakout up');
+    else if (bollinger < -0.5) parts.push('BB oversold');
+    if (sentiment > 0.4)  parts.push('strong momentum');
+    else if (sentiment < -0.4) parts.push('weak momentum');
+    if (acceleration > 0.3) parts.push('accelerating');
     const explanation = `${prediction} — ${parts.slice(0, 4).join(', ')}`;
 
+    // Target price: ATR-based with confidence scaling
     const atrPct = price > 0 ? atr / price : 0.01;
-    const predictedPrice = +(price * (1 + atrPct * (prediction === 'Bullish' ? 0.5 : -0.5))).toFixed(2);
+    const targetMult = 0.4 + (confidence - 55) / 100; // 0.4–0.8x ATR
+    const predictedPrice = +(price * (1 + atrPct * targetMult * dir)).toFixed(2);
 
     return {
       stock: symbol, sector, exchange,
@@ -4017,8 +4066,8 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
         MACD:      +macdScore.toFixed(3),
         Volume:    +volScore.toFixed(3),
         Trend:     +trendScore.toFixed(3),
-        Sentiment: +sentimentScore.toFixed(3),
-        Bollinger: +bollingerScore.toFixed(3),
+        Sentiment: +sentiment.toFixed(3),
+        Bollinger: +bollinger.toFixed(3),
       },
       explanation,
       predicted_price: predictedPrice,
@@ -4027,9 +4076,11 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
       indicators: {
         rsi: +rsi.toFixed(1), atr: +atr.toFixed(2),
         volumeRatio: +volRatio.toFixed(2),
-        ema20: +ema20.toFixed(2), ema50: +ema50.toFixed(2),
-        bollinger: +bollingerScore.toFixed(3),
-        sentiment: +sentimentScore.toFixed(3),
+        ema20: +ema9.toFixed(2), ema50: +ema50.toFixed(2),
+        bollinger: +bollinger.toFixed(3),
+        sentiment: +sentiment.toFixed(3),
+        stochastic: +stochastic.toFixed(3),
+        acceleration: +acceleration.toFixed(3),
       },
     };
   }

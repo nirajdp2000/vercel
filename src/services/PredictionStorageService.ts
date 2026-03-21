@@ -94,10 +94,15 @@ export class PredictionStorageService {
   static async savePrediction(pred: StockPrediction): Promise<void> {
     const now = Date.now();
 
-    // 1. Supabase
+    // 1. Supabase — upsert by (stock_symbol, prediction_date) to avoid duplicates on re-runs
     const sb = getSupabaseClient();
     if (sb) {
       try {
+        // Delete existing row for same stock+date first, then insert fresh
+        await sb.from('predictions')
+          .delete()
+          .eq('stock_symbol', pred.stock_symbol)
+          .eq('prediction_date', pred.prediction_date);
         const { error } = await sb.from('predictions').insert({
           stock_symbol: pred.stock_symbol,
           prediction_date: pred.prediction_date,
@@ -116,9 +121,11 @@ export class PredictionStorageService {
       }
     }
 
-    // 2. SQLite
+    // 2. SQLite — delete+insert to avoid duplicates
     const db = getSqliteDb();
     if (db) {
+      db.prepare('DELETE FROM predictions WHERE stock_symbol = ? AND prediction_date = ?')
+        .run(pred.stock_symbol, pred.prediction_date);
       db.prepare(`
         INSERT INTO predictions (
           stock_symbol, prediction_date, target_date, prediction, confidence,
@@ -132,11 +139,15 @@ export class PredictionStorageService {
       return;
     }
 
-    // 3. Memory
+    // 3. Memory — upsert
+    const idx = memoryStore.findIndex(p => p.stock_symbol === pred.stock_symbol && p.prediction_date === pred.prediction_date);
+    if (idx >= 0) memoryStore.splice(idx, 1);
     memoryStore.push({ ...pred, id: memoryStore.length + 1, created_at: now });
   }
 
   static async getPredictionsByDate(predictionDate: string): Promise<StockPrediction[]> {
+    let rows: StockPrediction[] = [];
+
     // 1. Supabase
     const sb = getSupabaseClient();
     if (sb) {
@@ -147,7 +158,7 @@ export class PredictionStorageService {
           .eq('prediction_date', predictionDate)
           .order('confidence', { ascending: false });
         if (!error && data) {
-          return data.map((r: any) => ({
+          rows = data.map((r: any) => ({
             ...r,
             signals: typeof r.signals === 'string' ? JSON.parse(r.signals) : r.signals,
           }));
@@ -155,17 +166,22 @@ export class PredictionStorageService {
       } catch (e: any) {
         console.error('[PredictionStorage] Supabase query error:', e.message);
       }
+    } else {
+      // 2. SQLite
+      const db = getSqliteDb();
+      if (db) {
+        const dbRows = db.prepare('SELECT * FROM predictions WHERE prediction_date = ? ORDER BY confidence DESC').all(predictionDate);
+        rows = dbRows.map((r: any) => ({ ...r, signals: JSON.parse(r.signals) }));
+      } else {
+        // 3. Memory
+        rows = memoryStore.filter(p => p.prediction_date === predictionDate);
+      }
     }
 
-    // 2. SQLite
-    const db = getSqliteDb();
-    if (db) {
-      const rows = db.prepare('SELECT * FROM predictions WHERE prediction_date = ? ORDER BY confidence DESC').all(predictionDate);
-      return rows.map((r: any) => ({ ...r, signals: JSON.parse(r.signals) }));
-    }
-
-    // 3. Memory
-    return memoryStore.filter(p => p.prediction_date === predictionDate);
+    // Return top 20 bullish + top 20 bearish — same as live tab
+    const bullish = rows.filter(p => p.prediction === 'Bullish').slice(0, 20);
+    const bearish = rows.filter(p => p.prediction === 'Bearish').slice(0, 20);
+    return [...bullish, ...bearish];
   }
 
   static async updateActualPrice(id: number, actualPrice: number, actualChange: number): Promise<void> {
