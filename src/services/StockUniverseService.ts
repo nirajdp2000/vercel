@@ -100,33 +100,19 @@ function guessSector(symbol: string): [string, string] {
 
 // ─── Supabase cache ───────────────────────────────────────────────────────────
 
-async function readFromSupabase(): Promise<StockProfile[] | null> {
+async function readFromSupabase(): Promise<{ stocks: StockProfile[]; updatedAt: number } | null> {
   const sb = getSupabaseClient();
   if (!sb) return null;
   try {
-    // Check freshness via most recent updated_at
-    const { data: meta } = await sb
-      .from('stock_universe')
-      .select('updated_at')
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .single();
-
-    if (!meta) return null;
-    const age = Date.now() - Number(meta.updated_at);
-    if (age > CACHE_TTL_MS) {
-      console.log('[StockUniverseService] Supabase cache stale, will refresh from CDN');
-      return null; // trigger CDN refresh
-    }
-
     // Read all rows in batches (Supabase default limit is 1000)
     const all: StockProfile[] = [];
+    let latestUpdatedAt = 0;
     let from = 0;
     const batchSize = 1000;
     while (true) {
       const { data, error } = await sb
         .from('stock_universe')
-        .select('symbol,name,exchange,sector,industry,market_cap,avg_volume,instrument_key')
+        .select('symbol,name,exchange,sector,industry,market_cap,avg_volume,instrument_key,updated_at')
         .range(from, from + batchSize - 1);
       if (error || !data || data.length === 0) break;
       for (const r of data) {
@@ -140,14 +126,15 @@ async function readFromSupabase(): Promise<StockProfile[] | null> {
           averageVolume: r.avg_volume,
           instrumentKey: r.instrument_key,
         });
+        if (Number(r.updated_at) > latestUpdatedAt) latestUpdatedAt = Number(r.updated_at);
       }
       if (data.length < batchSize) break;
       from += batchSize;
     }
 
     if (all.length > 500) {
-      console.log(`[StockUniverseService] Loaded ${all.length} stocks from Supabase cache`);
-      return all;
+      console.log(`[StockUniverseService] Loaded ${all.length} stocks from Supabase cache (age: ${Math.round((Date.now() - latestUpdatedAt) / 3600000)}h)`);
+      return { stocks: all, updatedAt: latestUpdatedAt };
     }
     return null;
   } catch (e: any) {
@@ -268,21 +255,18 @@ async function fetchFromCDN(): Promise<StockProfile[]> {
 async function loadUniverse(): Promise<StockProfile[]> {
   const start = Date.now();
 
-  // 1. Try Supabase first (fast on Vercel)
+  // 1. Try Supabase first (fast on Vercel — no CDN fetch needed)
   const cached = await readFromSupabase();
-  if (cached && cached.length > 500) {
-    // Kick off background CDN refresh if cache is getting old (> 20h)
-    const { data: meta } = await getSupabaseClient()!
-      .from('stock_universe').select('updated_at').order('updated_at', { ascending: false }).limit(1).single()
-      .catch(() => ({ data: null }));
-    const age = meta ? Date.now() - Number(meta.updated_at) : 0;
-    if (age > 20 * 60 * 60 * 1000) {
-      console.log('[StockUniverseService] Background CDN refresh triggered');
+  if (cached && cached.stocks.length > 500) {
+    const ageMs = Date.now() - cached.updatedAt;
+    // Background CDN refresh if cache is older than 20h
+    if (ageMs > 20 * 60 * 60 * 1000) {
+      console.log('[StockUniverseService] Background CDN refresh triggered (cache age > 20h)');
       fetchFromCDN()
         .then(u => writeToSupabase(u))
         .catch(e => console.warn('[StockUniverseService] Background refresh failed:', e.message));
     }
-    return cached;
+    return cached.stocks;
   }
 
   // 2. Fetch from Upstox CDN
@@ -295,7 +279,7 @@ async function loadUniverse(): Promise<StockProfile[]> {
       `[StockUniverseService] CDN loaded ${universe.length} stocks ` +
       `(NSE: ${nseCount}, BSE-only: ${bseCount}) in ${Date.now() - start}ms`
     );
-    // Save to Supabase in background (don't block the response)
+    // Save to Supabase in background
     writeToSupabase(universe).catch(e =>
       console.warn('[StockUniverseService] Supabase write failed:', e.message)
     );
