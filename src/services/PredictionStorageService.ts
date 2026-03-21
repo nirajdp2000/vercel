@@ -108,9 +108,7 @@ export class PredictionStorageService {
           prediction: pred.prediction,
           confidence: pred.confidence,
           predicted_price: pred.predicted_price,
-          current_price: pred.signals?.current_price ?? null,
-          sector: pred.signals?.sector ?? null,
-          signals: pred.signals,
+          signals: pred.signals,   // current_price + sector stored inside signals JSONB
           explanation: pred.explanation,
           created_at: now,
         }));
@@ -171,7 +169,7 @@ export class PredictionStorageService {
           prediction: pred.prediction,
           confidence: pred.confidence,
           predicted_price: pred.predicted_price,
-          signals: pred.signals,
+          signals: pred.signals,   // current_price + sector stored inside signals JSONB
           explanation: pred.explanation,
           created_at: now,
         });
