@@ -1735,7 +1735,20 @@ function NextDayPredictions() {
       {tab === 'history' && (
         <div className="space-y-4">
 
-          {/* Overall accuracy stats — only show when we have resolved data */}
+          {/* How it works banner */}
+          <div className="rounded-2xl border border-violet-500/15 bg-violet-500/[0.06] px-4 py-3 flex items-start gap-3">
+            <div className="w-6 h-6 rounded-full bg-violet-500/20 flex items-center justify-center shrink-0 mt-0.5">
+              <Clock size={12} className="text-violet-300" />
+            </div>
+            <div>
+              <p className="text-[11px] font-black text-violet-300 mb-0.5">How to use History</p>
+              <p className="text-[10px] text-white/40 leading-relaxed">
+                Each date below is a <span className="text-white/70 font-bold">target trading day</span>. The app generated these predictions on the <span className="text-white/70 font-bold">previous evening</span>. Select a date to review what was predicted for that day and how accurate it was.
+              </p>
+            </div>
+          </div>
+
+          {/* Overall accuracy stats */}
           {accuracy && accuracy.total > 0 && (
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               {[
@@ -1752,25 +1765,67 @@ function NextDayPredictions() {
             </div>
           )}
 
-          {/* Date selector */}
+          {/* ── Date picker ── */}
           {historyDates.length > 0 ? (
-            <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-3 space-y-2">
-              <p className="text-[9px] text-white/30 uppercase tracking-[0.15em] font-bold">Prediction Date</p>
-              <div className="flex flex-wrap gap-1.5">
-                {historyDates.slice(0, 14).map(d => (
-                  <button
-                    key={d}
-                    onClick={() => { setHistoryDate(d); loadHistory(d); }}
-                    className={`rounded-lg px-3 py-1.5 text-[9px] font-black transition-all border ${
-                      historyDate === d
-                        ? 'bg-violet-500/20 text-violet-300 border-violet-500/30'
-                        : 'text-white/30 border-white/5 hover:text-white/60 hover:border-white/10'
-                    }`}
-                  >
-                    {d}
-                  </button>
-                ))}
+            <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4 space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div>
+                  <p className="text-[11px] font-black text-white">Select Target Date</p>
+                  <p className="text-[9px] text-white/30 mt-0.5">Showing predictions made for each trading day</p>
+                </div>
+                {/* Native date input as alternative */}
+                <div className="flex items-center gap-2">
+                  <label className="text-[9px] text-white/30 uppercase tracking-[0.12em] font-bold">Or pick:</label>
+                  <input
+                    type="date"
+                    value={historyDate}
+                    min={historyDates[historyDates.length - 1]}
+                    max={historyDates[0]}
+                    onChange={e => {
+                      const d = e.target.value;
+                      if (d) { setHistoryDate(d); loadHistory(d); }
+                    }}
+                    className="rounded-lg border border-white/10 bg-black/40 px-3 py-1.5 text-[11px] text-white outline-none focus:border-violet-400/40 [color-scheme:dark]"
+                  />
+                </div>
               </div>
+
+              {/* Date pills — all dates, scrollable row */}
+              <div className="flex gap-1.5 overflow-x-auto pb-1 [&::-webkit-scrollbar]:hidden">
+                {historyDates.map(d => {
+                  const dt = new Date(d + 'T00:00:00');
+                  const isSelected = historyDate === d;
+                  const dayName = dt.toLocaleDateString('en-IN', { weekday: 'short' });
+                  const dayNum  = dt.toLocaleDateString('en-IN', { day: 'numeric' });
+                  const month   = dt.toLocaleDateString('en-IN', { month: 'short' });
+                  return (
+                    <button
+                      key={d}
+                      onClick={() => { setHistoryDate(d); loadHistory(d); }}
+                      className={`shrink-0 rounded-xl px-3 py-2 text-center transition-all border min-w-[56px] ${
+                        isSelected
+                          ? 'bg-violet-500/25 border-violet-400/40 text-violet-200'
+                          : 'border-white/5 text-white/40 hover:text-white/70 hover:border-white/15 bg-white/[0.02]'
+                      }`}
+                    >
+                      <p className="text-[8px] font-bold uppercase tracking-[0.1em] opacity-60">{dayName}</p>
+                      <p className="text-[14px] font-black leading-tight">{dayNum}</p>
+                      <p className="text-[8px] font-bold opacity-60">{month}</p>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Selected date context */}
+              {historyDate && (
+                <div className="flex items-center gap-2 pt-1 border-t border-white/5">
+                  <span className="text-[9px] text-white/30">Viewing predictions for</span>
+                  <span className="text-[11px] font-black text-violet-300">
+                    {new Date(historyDate + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+                  </span>
+                  <span className="text-[9px] text-white/20">— generated the previous evening</span>
+                </div>
+              )}
             </div>
           ) : (
             <div className="flex flex-col items-center gap-3 py-16 text-white/20">
@@ -1778,14 +1833,14 @@ function NextDayPredictions() {
                 <Clock size={24} className="opacity-30" />
               </div>
               <p className="text-sm font-bold text-white/40">No prediction history yet</p>
-              <p className="text-[11px] text-center max-w-xs">Run predictions from the Live tab — they'll be saved here automatically after each scan</p>
+              <p className="text-[11px] text-center max-w-xs text-white/30">Run predictions from the Live tab — they'll be saved here automatically after each scan</p>
             </div>
           )}
 
           {histLoading && (
             <div className="flex items-center justify-center gap-3 py-10 text-white/30">
               <RefreshCw size={16} className="animate-spin" />
-              <span className="text-sm font-bold">Loading history...</span>
+              <span className="text-sm font-bold">Loading predictions for {historyDate}…</span>
             </div>
           )}
 
