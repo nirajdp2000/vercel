@@ -46,18 +46,19 @@ export function getUniverse(): StockProfile[] {
 }
 
 export async function getUniverseAsync(): Promise<StockProfile[]> {
-  if (!_initialized && _initPromise) {
-    await _initPromise;
-  }
+  // Always trigger init if not done — handles cold starts where initUniverse()
+  // was called fire-and-forget and _initPromise may already be set
+  await initUniverse();
   return getUniverse();
 }
 
 export async function initUniverse(): Promise<void> {
   if (_initialized) return;
+  // If already in-flight, wait for it
   if (_initPromise) return _initPromise;
-
+  // Start loading and wait
   _initPromise = _loadUniverse();
-  await _initPromise;
+  return _initPromise;
 }
 
 // ── Internal ──────────────────────────────────────────────────────────────────

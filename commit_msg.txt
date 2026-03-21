@@ -1,1 +1,1 @@
-chore: store local changes
+fix: getUniverseAsync always awaits init, eager load on serverless cold start

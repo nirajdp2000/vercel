@@ -4117,10 +4117,12 @@ async function startServer() {
 // ── Serverless export for Vercel ──────────────────────────────────────────────
 export async function startServerlessApp() {
   const app = await buildApp();
-  // Kick off universe load in background (non-blocking)
-  initUniverse().catch(err =>
-    console.warn('[StockUniverseService] Background init failed:', err.message)
-  );
+  // Eagerly load universe — await so it's ready before first request
+  try {
+    await initUniverse();
+  } catch (err: any) {
+    console.warn('[StockUniverseService] Eager init failed:', err.message);
+  }
   return app;
 }
 
