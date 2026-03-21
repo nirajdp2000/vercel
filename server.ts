@@ -1415,15 +1415,23 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> =>
       if (sym.includes(q)) { partial.push(s); }
     }
 
-    const ranked = [...exact, ...startsWith, ...partial].slice(0, 20);
+    // Also search by name
+    const nameMatch: typeof universe = [];
+    for (const s of universe) {
+      const sym = s.symbol.toUpperCase();
+      if (sym === q || sym.startsWith(q) || sym.includes(q)) continue; // already captured
+      if ((s.name || '').toUpperCase().includes(q)) nameMatch.push(s);
+    }
+
+    const ranked = [...exact, ...startsWith, ...partial, ...nameMatch].slice(0, 20);
     console.log(`[Search] q="${raw}" universe=${universe.length} results=${ranked.length}`);
 
     res.json(ranked.map(s => ({
-      symbol: s.symbol,
-      name:   s.symbol,
-      key:    s.instrumentKey,
+      symbol:   s.symbol,
+      name:     s.name || s.symbol,
+      key:      s.instrumentKey,
       exchange: s.exchange,
-      sector: s.sector,
+      sector:   s.sector,
     })));
   });
 
@@ -1439,6 +1447,16 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> =>
       exchange: s.exchange,
       sector:   s.sector,
     })));
+  });
+
+  // Debug endpoint — universe load status
+  app.get("/api/debug/universe", async (req, res) => {
+    const universe = await getUniverseAsync();
+    res.json({
+      count: universe.length,
+      source: universe.length > 440 ? 'supabase' : 'fallback',
+      sample: universe.slice(0, 3).map(s => ({ symbol: s.symbol, name: s.name })),
+    });
   });
 
   // Convert our interval string to Upstox v3 {unit}/{interval} path segments
