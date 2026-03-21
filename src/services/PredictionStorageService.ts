@@ -9,7 +9,7 @@
 
 import { createRequire } from 'module';
 import path from 'path';
-import { getSupabaseClient } from '../lib/supabase.js';
+import { getSupabaseClient } from '../lib/supabase';
 
 export interface StockPrediction {
   id?: number;

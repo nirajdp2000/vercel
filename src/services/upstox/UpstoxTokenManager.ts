@@ -14,7 +14,7 @@
 import axios from 'axios';
 import path from 'path';
 import { createRequire } from 'module';
-import { getSupabaseClient } from '../../lib/supabase.js';
+import { getSupabaseClient } from '../../lib/supabase';
 
 interface TokenRecord {
   access_token: string;
