@@ -1611,8 +1611,36 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> =>
     return orbScanCache;
   };
 
+  /** NSE holidays (YYYY-MM-DD) — update annually */
+  const NSE_HOLIDAYS = new Set([
+    // 2025
+    '2025-01-26','2025-02-19','2025-03-14','2025-03-31',
+    '2025-04-10','2025-04-14','2025-04-18','2025-05-01',
+    '2025-08-15','2025-08-27','2025-10-02','2025-10-02',
+    '2025-10-21','2025-10-22','2025-11-05','2025-12-25',
+    // 2026
+    '2026-01-26','2026-03-03','2026-03-20','2026-04-02',
+    '2026-04-03','2026-04-14','2026-05-01','2026-08-15',
+    '2026-09-16','2026-10-02','2026-11-10','2026-11-11',
+    '2026-12-25',
+  ]);
+
+  function istNow(): Date {
+    return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  }
+
+  /** Returns true only on NSE trading days (Mon–Fri, not a holiday) */
+  function isMarketDay(date?: Date): boolean {
+    const ist = date ? new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })) : istNow();
+    const dow = ist.getDay(); // 0=Sun, 6=Sat
+    if (dow === 0 || dow === 6) return false;
+    const dateStr = ist.toISOString().slice(0, 10);
+    return !NSE_HOLIDAYS.has(dateStr);
+  }
+
   function isMarketHours(): boolean {
-    const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    if (!isMarketDay()) return false;
+    const ist = istNow();
     const mins = ist.getHours() * 60 + ist.getMinutes();
     return mins >= 9 * 60 + 15 && mins <= 15 * 60 + 30;
   }
@@ -3790,7 +3818,40 @@ Respond ONLY with this JSON structure (fill every field):
       computedAt: new Date().toISOString(),
     };
 
-    aiIntelCache = { expiresAt: Date.now() + 60_000, payload };
+    // On non-trading days, zero out all price changes so the UI doesn't show
+    // fake "changed stocks" from synthetic data re-seeded with today's date.
+    const tradingDay = isMarketDay();
+    if (!tradingDay) {
+      payload.rankings = payload.rankings.map((r: any) => ({
+        ...r,
+        priceChange: 0,
+        priceChangePercent: 0,
+        priceAcceleration: 0,
+        earlyRallySignal: false,
+        rallyProbabilityScore: 0,
+        volumeSpike: 1,
+        alerts: [],
+        signal: 'HOLD',
+        confidence: 'LOW',
+        dataSource: 'synthetic',
+      }));
+      payload.earlyRallyCandidates = [];
+      payload.alerts = [];
+      payload.summary = {
+        ...payload.summary,
+        earlyRallyCount: 0,
+        marketBias: 'NEUTRAL',
+        strongBuyCount: 0,
+        buyCount: 0,
+        sellCount: 0,
+      };
+    }
+    payload.marketOpen = tradingDay && isMarketHours();
+    payload.marketDay = tradingDay;
+
+    // Extend cache TTL on non-trading days — no point refreshing every 60s
+    const cacheTtl = tradingDay ? 60_000 : 60 * 60_000; // 1 min vs 60 min
+    aiIntelCache = { expiresAt: Date.now() + cacheTtl, payload };
     return payload;
   };
 
@@ -4314,13 +4375,19 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
           totalScanned: universe.length,
           bullishCount: bullish.length, bearishCount: bearish.length,
           generatedAt: new Date().toISOString(),
+          marketDay: isMarketDay(),
+          marketOpen: isMarketHours(),
         },
         ts: Date.now(),
       };
       console.log(`[PredictionScan] Done — ${universe.length} stocks, ${bullish.length} bullish, ${bearish.length} bearish`);
 
-      // Persist predictions — await so Vercel serverless doesn't kill it before it completes
+      // Persist predictions only on actual trading days — prevents weekend/holiday
+      // synthetic data from polluting the history tab with fake "changed stocks"
       const today = new Date().toISOString().split('T')[0];
+      if (!isMarketDay()) {
+        console.log(`[PredictionScan] Non-trading day (${today}) — skipping DB persist`);
+      } else {
       const allTop = [...topBullish, ...topBearish];
       try {
         await PredictionStorageService.saveAllPredictions(today, allTop.map(r => ({
@@ -4342,6 +4409,7 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
         console.log(`[PredictionScan] Persisted ${allTop.length} predictions for ${today}`);
       } catch (e: any) {
         console.error('[PredictionScan] persist error:', e.message);
+      }
       }
     } finally {
       predRunning = false;

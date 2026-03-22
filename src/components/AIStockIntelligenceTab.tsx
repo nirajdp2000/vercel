@@ -4,7 +4,7 @@ import {
   Activity, AlertTriangle, BarChart2, Brain, ChevronUp, ChevronDown,
   Globe, Newspaper, RefreshCw, Shield, TrendingUp, TrendingDown,
   Zap, ArrowUpRight, ArrowDownRight, Clock, Cpu, Target, Flame,
-  BarChart, Eye, Filter
+  BarChart, Eye, Filter, MoonStar, SunMedium
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1544,6 +1544,16 @@ function NextDayPredictions() {
       {/* ── LIVE TAB ── */}
       {tab === 'live' && (
         <>
+          {/* Market closed notice */}
+          {data && !(data as any).marketDay && (
+            <div className="rounded-2xl border border-amber-500/20 bg-amber-500/[0.06] px-4 py-3 flex items-center gap-3">
+              <MoonStar size={16} className="text-amber-400 shrink-0" />
+              <div>
+                <p className="text-[11px] font-black text-amber-300">Market Closed — Weekend / Holiday</p>
+                <p className="text-[10px] text-white/40">These predictions are based on the last trading session. No new data will be saved until the next trading day.</p>
+              </div>
+            </div>
+          )}
           {loading && (
             <div className="flex flex-col items-center justify-center gap-4 py-16">
               <div className="w-12 h-12 rounded-full border-2 border-violet-500/30 flex items-center justify-center">
@@ -2076,6 +2086,34 @@ export default function AIStockIntelligenceTab() {
 
   return (
     <div className="space-y-3">
+
+      {/* ── Market Closed Notice ── */}
+      {!(dashboard as any).marketDay && (
+        <div className="rounded-2xl border border-amber-500/20 bg-amber-500/[0.06] px-4 py-3 flex items-center gap-3">
+          <div className="w-7 h-7 rounded-full bg-amber-500/15 flex items-center justify-center shrink-0">
+            <MoonStar size={13} className="text-amber-400" />
+          </div>
+          <div>
+            <p className="text-[11px] font-black text-amber-300">Market Closed — Weekend / Holiday</p>
+            <p className="text-[10px] text-white/40 leading-relaxed">
+              NSE/BSE is not trading today. Scores and signals shown are based on the last available trading session. Price change figures are frozen at zero — no live movement to report.
+            </p>
+          </div>
+        </div>
+      )}
+      {(dashboard as any).marketDay && !(dashboard as any).marketOpen && (
+        <div className="rounded-2xl border border-blue-500/20 bg-blue-500/[0.06] px-4 py-3 flex items-center gap-3">
+          <div className="w-7 h-7 rounded-full bg-blue-500/15 flex items-center justify-center shrink-0">
+            <SunMedium size={13} className="text-blue-400" />
+          </div>
+          <div>
+            <p className="text-[11px] font-black text-blue-300">Market Closed — Outside Trading Hours</p>
+            <p className="text-[10px] text-white/40 leading-relaxed">
+              NSE/BSE trading hours are 9:15 AM – 3:30 PM IST. Live signals will activate when the market opens.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* ── Header ── */}
       <div className="rounded-2xl border border-white/5 bg-gradient-to-r from-violet-500/10 via-transparent to-cyan-500/5 px-5 py-4">
