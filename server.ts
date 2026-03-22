@@ -347,7 +347,6 @@ const NSE_STOCK_UNIVERSE: Array<{ symbol: string; sector: string; industry: stri
   { symbol: "LTIM",        sector: "Technology",   industry: "IT Services",        marketCap: 40000,   averageVolume: 800000 },
   { symbol: "LTTS",        sector: "Technology",   industry: "Engineering Services",marketCap: 18000,  averageVolume: 400000 },
   { symbol: "MANAPPURAM",  sector: "Financials",   industry: "NBFC",               marketCap: 8000,    averageVolume: 3000000 },
-  { symbol: "MARICO",      sector: "Consumer",     industry: "FMCG",               marketCap: 32000,   averageVolume: 2000000 },
   { symbol: "MAXHEALTH",   sector: "Healthcare",   industry: "Hospitals",          marketCap: 16000,   averageVolume: 1500000 },
   { symbol: "MCX",         sector: "Financials",   industry: "Exchange",           marketCap: 10000,   averageVolume: 500000 },
   { symbol: "METROPOLIS",  sector: "Healthcare",   industry: "Diagnostics",        marketCap: 8000,    averageVolume: 300000 },
@@ -355,7 +354,6 @@ const NSE_STOCK_UNIVERSE: Array<{ symbol: string; sector: string; industry: stri
   { symbol: "MINDTREE",    sector: "Technology",   industry: "IT Services",        marketCap: 12000,   averageVolume: 600000 },
   { symbol: "MOTHERSON",   sector: "Auto",         industry: "Auto Components",    marketCap: 30000,   averageVolume: 8000000 },
   { symbol: "MRF",         sector: "Auto",         industry: "Tyres",              marketCap: 22000,   averageVolume: 50000 },
-  { symbol: "MUTHOOTFIN",  sector: "Financials",   industry: "NBFC",               marketCap: 28000,   averageVolume: 1500000 },
   { symbol: "NATCOPHARM",  sector: "Healthcare",   industry: "Pharma",             marketCap: 6000,    averageVolume: 500000 },
   { symbol: "NBCC",        sector: "Industrials",  industry: "Construction",       marketCap: 10000,   averageVolume: 5000000 },
   { symbol: "NCC",         sector: "Industrials",  industry: "Construction",       marketCap: 8000,    averageVolume: 3000000 },
@@ -422,7 +420,6 @@ const NSE_STOCK_UNIVERSE: Array<{ symbol: string; sector: string; industry: stri
   { symbol: "AKZOINDIA",   sector: "Materials",    industry: "Paints",             marketCap: 4000,    averageVolume: 100000 },
   { symbol: "AMARAJABAT",  sector: "Auto",         industry: "Batteries",          marketCap: 6000,    averageVolume: 500000 },
   { symbol: "AMBER",       sector: "Consumer",     industry: "Consumer Durables",  marketCap: 6000,    averageVolume: 200000 },
-  { symbol: "AMBUJACEM",   sector: "Materials",    industry: "Cement",             marketCap: 72000,   averageVolume: 4000000 },
   { symbol: "ANGELONE",    sector: "Financials",   industry: "Broking",            marketCap: 10000,   averageVolume: 500000 },
   { symbol: "ANURAS",      sector: "Consumer",     industry: "QSR",                marketCap: 4000,    averageVolume: 200000 },
   { symbol: "APARINDS",    sector: "Industrials",  industry: "Cables",             marketCap: 6000,    averageVolume: 200000 },
@@ -433,7 +430,6 @@ const NSE_STOCK_UNIVERSE: Array<{ symbol: string; sector: string; industry: stri
   { symbol: "ASHOKLEY",    sector: "Auto",         industry: "Commercial Vehicles",marketCap: 20000,   averageVolume: 5000000 },
   { symbol: "ASKAUTOLTD",  sector: "Auto",         industry: "Auto Components",    marketCap: 2000,    averageVolume: 200000 },
   { symbol: "ATGL",        sector: "Energy",       industry: "Gas Distribution",   marketCap: 8000,    averageVolume: 500000 },
-  { symbol: "ATUL",        sector: "Materials",    industry: "Chemicals",          marketCap: 10000,   averageVolume: 100000 },
   { symbol: "AVANTIFEED",  sector: "Consumer",     industry: "Aquaculture",        marketCap: 4000,    averageVolume: 500000 },
   { symbol: "AXISCADES",   sector: "Technology",   industry: "Engineering Services",marketCap: 2000,   averageVolume: 200000 },
   { symbol: "BAJAJHLDNG",  sector: "Financials",   industry: "Investment",         marketCap: 20000,   averageVolume: 100000 },
@@ -465,7 +461,6 @@ const NSE_STOCK_UNIVERSE: Array<{ symbol: string; sector: string; industry: stri
   { symbol: "CYIENT",      sector: "Technology",   industry: "Engineering Services",marketCap: 8000,   averageVolume: 300000 },
   { symbol: "DATAPATTNS",  sector: "Technology",   industry: "Defence Electronics",marketCap: 6000,    averageVolume: 100000 },
   { symbol: "DCMSHRIRAM",  sector: "Materials",    industry: "Chemicals",          marketCap: 4000,    averageVolume: 300000 },
-  { symbol: "DELHIVERY",   sector: "Industrials",  industry: "Logistics",          marketCap: 4500,    averageVolume: 2000000 },
   { symbol: "DELTACORP",   sector: "Consumer",     industry: "Gaming",             marketCap: 4000,    averageVolume: 1000000 },
   { symbol: "DEVYANI",     sector: "Consumer",     industry: "QSR",                marketCap: 6000,    averageVolume: 1000000 },
   { symbol: "DHANI",       sector: "Financials",   industry: "Fintech",            marketCap: 2000,    averageVolume: 1000000 },
@@ -542,7 +537,6 @@ const NSE_STOCK_UNIVERSE: Array<{ symbol: string; sector: string; industry: stri
   { symbol: "JUSTDIAL",    sector: "Technology",   industry: "Local Search",       marketCap: 4000,    averageVolume: 300000 },
 
   { symbol: "KALYANKJIL",  sector: "Consumer",     industry: "Jewellery",          marketCap: 8000,    averageVolume: 2000000 },
-  { symbol: "KANSAINER",   sector: "Consumer",     industry: "Paints",             marketCap: 6000,    averageVolume: 300000 },
   { symbol: "KAYNES",      sector: "Technology",   industry: "Electronics Mfg",    marketCap: 6000,    averageVolume: 200000 },
   { symbol: "KFINTECH",    sector: "Financials",   industry: "Registrar",          marketCap: 6000,    averageVolume: 500000 },
   { symbol: "KIMS",        sector: "Healthcare",   industry: "Hospitals",          marketCap: 6000,    averageVolume: 300000 },
@@ -4731,7 +4725,9 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
     if (predRunning) return;
     predRunning = true;
     try {
-      const universe = await getUniverseAsync();
+      // Use curated NSE_STOCK_UNIVERSE (434 stocks) — same as all other scan engines.
+      // The Supabase universe (5221 stocks) is for search/autocomplete only.
+      const universe = NSE_STOCK_UNIVERSE;
       if (universe.length === 0) { predRunning = false; return; }
 
       const bullish: any[] = [];

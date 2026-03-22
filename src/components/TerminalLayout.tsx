@@ -459,18 +459,9 @@ export default function TerminalLayout(p: TerminalProps) {
                   <span className="text-[9px] text-zinc-600 hidden sm:inline truncate max-w-[140px]">{p.selectedStock.name}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  {isLive ? (
+                  {isLive && (
                     <span className="flex items-center gap-1 text-[8px] font-black uppercase tracking-widest text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded-full shadow-[0_0_8px_rgba(16,185,129,0.15)]">
                       <span className="w-1 h-1 rounded-full bg-emerald-400 animate-pulse inline-block" /> LIVE
-                    </span>
-                  ) : p.livePriceSource === 'no_auth' ? (
-                    <a href="/upstox/connect" target="_blank" rel="noopener noreferrer"
-                      className="flex items-center gap-1 text-[8px] font-black uppercase tracking-widest text-rose-400 bg-rose-500/10 border border-rose-500/20 px-1.5 py-0.5 rounded-full">
-                      <span className="w-1 h-1 rounded-full bg-rose-500 animate-pulse inline-block" /> Connect Upstox
-                    </a>
-                  ) : (
-                    <span className="flex items-center gap-1 text-[8px] font-black uppercase tracking-widest text-zinc-600 bg-zinc-800/50 border border-white/[0.05] px-1.5 py-0.5 rounded-full">
-                      <span className="w-1 h-1 rounded-full bg-zinc-600 animate-pulse inline-block" /> Connecting
                     </span>
                   )}
                   {p.historicalSource && (
