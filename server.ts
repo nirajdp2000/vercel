@@ -4450,6 +4450,65 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
     const now = Date.now();
     const refresh = req.query.refresh === 'true';
 
+    // ── Non-trading day: serve last saved trading day's data from DB ──────────
+    // This ensures Live Prediction tab always shows real data (Friday's on weekends)
+    // instead of re-running synthetic scan with today's date seed.
+    if (!isMarketDay()) {
+      try {
+        const dates = await PredictionStorageService.getAllDatesWithPredictions();
+        if (dates.length > 0) {
+          const lastDate = dates[0]; // dates are sorted desc — most recent first
+          const preds = await PredictionStorageService.getPredictionsByDate(lastDate);
+          if (preds.length > 0) {
+            const bullish = preds.filter((p: any) => p.prediction === 'Bullish');
+            const bearish = preds.filter((p: any) => p.prediction === 'Bearish');
+            // Map DB rows to the same shape as live scan output
+            const mapRow = (p: any) => ({
+              stock: p.stock_symbol,
+              sector: p.signals?.sector || p.sector || 'Unknown',
+              prediction: p.prediction,
+              confidence: p.confidence,
+              predicted_price: p.predicted_price,
+              current_price: p.signals?.current_price || p.current_price || p.predicted_price,
+              explanation: p.explanation,
+              signals: {
+                RSI: p.signals?.RSI ?? 0, MACD: p.signals?.MACD ?? 0,
+                Volume: p.signals?.Volume ?? 0, Trend: p.signals?.Trend ?? 0,
+                Sentiment: p.signals?.Sentiment ?? 0, Bollinger: p.signals?.Bollinger ?? 0,
+                Stochastic: p.signals?.Stochastic ?? 0, Acceleration: p.signals?.Acceleration ?? 0,
+              },
+              indicators: {
+                rsi: p.signals?.RSI ? Math.round(50 + p.signals.RSI * 30) : 50,
+                atr: p.signals?.ATR ?? 0,
+                volumeRatio: p.signals?.Volume ? 1 + p.signals.Volume : 1,
+                ema20: p.signals?.current_price || p.predicted_price,
+                ema50: p.signals?.current_price || p.predicted_price,
+                bollinger: p.signals?.Bollinger ?? 0,
+                sentiment: p.signals?.Sentiment ?? 0,
+                stochastic: p.signals?.Stochastic ?? 0,
+                acceleration: p.signals?.Acceleration ?? 0,
+              },
+            });
+            return res.json({
+              bullish: bullish.map(mapRow),
+              bearish: bearish.map(mapRow),
+              totalScanned: preds.length,
+              bullishCount: bullish.length,
+              bearishCount: bearish.length,
+              generatedAt: new Date(lastDate).toISOString(),
+              marketDay: false,
+              marketOpen: false,
+              lastTradingDay: lastDate,  // frontend uses this to show "Showing Friday data"
+            });
+          }
+        }
+      } catch (e: any) {
+        console.error('[PredictionRun] last-trading-day fallback error:', e.message);
+      }
+      // No DB data yet — fall through to synthetic scan as last resort
+    }
+
+    // ── Trading day: normal cache / scan flow ─────────────────────────────────
     // Fresh cache — return immediately
     if (!refresh && predCache && (now - predCache.ts) < PRED_CACHE_TTL) {
       return res.json(predCache.data);
@@ -4468,7 +4527,6 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
     }
 
     // Stale cache — return stale data immediately, kick off background refresh
-    // (Vercel: scan + save will complete because we await before this handler returns)
     if (!predRunning) {
       runPredictionScan().catch(e => console.error('[PredictionScan]', e));
     }

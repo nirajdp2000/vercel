@@ -1574,7 +1574,11 @@ function NextDayPredictions() {
               <MoonStar size={16} className="text-amber-400 shrink-0" />
               <div>
                 <p className="text-[11px] font-black text-amber-300">Market Closed — Weekend / Holiday</p>
-                <p className="text-[10px] text-white/40">These predictions are based on the last trading session. No new data will be saved until the next trading day.</p>
+                <p className="text-[10px] text-white/40">
+                  {(data as any).lastTradingDay
+                    ? `Showing last trading session data (${new Date((data as any).lastTradingDay).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' })}). Prices are not updated.`
+                    : 'These predictions are based on the last trading session. No new data will be saved until the next trading day.'}
+                </p>
               </div>
             </div>
           )}
