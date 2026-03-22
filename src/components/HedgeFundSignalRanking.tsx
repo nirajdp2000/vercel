@@ -81,17 +81,17 @@ export function HedgeFundSignalRanking({ dashboard }: { dashboard?: HedgeFundSig
       </div>
 
       {/* ── Table + right panel side by side ── */}
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1fr_300px] xl:items-stretch">
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1fr_300px]">
 
-        {/* Narrow rankings table */}
-        <div className="rounded-[1.5rem] border border-white/5 bg-zinc-950/75 overflow-hidden min-w-0">
-          <div className="flex items-center justify-between border-b border-white/5 px-4 py-3">
+        {/* Narrow rankings table — fixed height so right panel can match */}
+        <div className="flex flex-col rounded-[1.5rem] border border-white/5 bg-zinc-950/75 overflow-hidden min-w-0 h-[580px]">
+          <div className="flex items-center justify-between border-b border-white/5 px-4 py-3 shrink-0">
             <h4 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-white">
               <TrendingUp className="h-3.5 w-3.5 text-emerald-300" /> Top {rankings.length} Stocks
             </h4>
             <span className="text-[9px] text-zinc-500">Click row → inspect factors</span>
           </div>
-          <div className="overflow-x-auto max-h-[520px] overflow-y-auto">
+          <div className="flex-1 overflow-x-auto overflow-y-auto min-h-0">
             <table className="w-full min-w-[420px] text-left">
               <thead className="sticky top-0 bg-zinc-950/98 text-[8px] font-bold uppercase tracking-[0.15em] text-zinc-500 border-b border-white/5">
                 <tr>
@@ -128,8 +128,8 @@ export function HedgeFundSignalRanking({ dashboard }: { dashboard?: HedgeFundSig
           </div>
         </div>
 
-        {/* Right panel: Factor Breakdown + Sector Strength stacked, fills table height */}
-        <div className="flex flex-col gap-4 min-w-0 min-h-0 max-h-[580px]">
+        {/* Right panel — same fixed height, flex column so Sector Strength fills remainder */}
+        <div className="flex flex-col gap-4 min-w-0 h-[580px]">
 
           {/* Factor Breakdown */}
           <div className="rounded-[1.5rem] border border-white/5 bg-zinc-950/75 p-4">
