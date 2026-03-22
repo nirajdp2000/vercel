@@ -1,1 +1,1 @@
-fix: both columns fixed h-580px so sector strength fills to bottom with no blank gap
+fix: save rankings history every day not just trading days

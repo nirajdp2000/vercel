@@ -4356,13 +4356,13 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
     try {
       const base = await buildAIIntelligenceDashboard();
       const enriched = await enrichDashboardWithGemini(base);
-      // Auto-save rankings snapshot on trading days (fire-and-forget, non-blocking)
-      if (base.marketDay) {
-        const today = new Date().toISOString().slice(0, 10);
-        saveRankingsSnapshot(today, base.rankings.slice(0, 50)).catch(e =>
-          console.error('[RankingsHistory] auto-save error:', e.message)
-        );
-      }
+      // Auto-save rankings snapshot every day (not just trading days).
+      // On non-trading days the data is synthetic but still useful for history.
+      // Deduplicated by date — safe to call multiple times.
+      const today = new Date().toISOString().slice(0, 10);
+      saveRankingsSnapshot(today, base.rankings.slice(0, 50)).catch(e =>
+        console.error('[RankingsHistory] auto-save error:', e.message)
+      );
       res.json(enriched);
     } catch (err: any) {
       logError("ai-intelligence.dashboard.failed", err);
@@ -4374,13 +4374,11 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
     try {
       const base = await buildAIIntelligenceDashboard(true);
       const enriched = await enrichDashboardWithGemini(base, true);
-      // Auto-save on trading days
-      if (base.marketDay) {
-        const today = new Date().toISOString().slice(0, 10);
-        saveRankingsSnapshot(today, base.rankings.slice(0, 50)).catch(e =>
-          console.error('[RankingsHistory] auto-save error:', e.message)
-        );
-      }
+      // Auto-save on every refresh (trading day or not)
+      const today = new Date().toISOString().slice(0, 10);
+      saveRankingsSnapshot(today, base.rankings.slice(0, 50)).catch(e =>
+        console.error('[RankingsHistory] auto-save error:', e.message)
+      );
       res.json(enriched);
     } catch (err: any) {
       logError("ai-intelligence.refresh.failed", err);
