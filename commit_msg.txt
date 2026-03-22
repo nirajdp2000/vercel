@@ -1,9 +1,20 @@
-feat: skip rankings snapshot on weekends/holidays, label dates in history dropdown
+feat: rankings history outcome tracker — compare predictions vs actual price after N trading days
 
-- server.ts: saveRankingsSnapshot now guarded by isMarketDay() — no saves on weekends or NSE holidays
-- server.ts: /api/rankings/history/dates returns annotated[] with isTrading flag (already done)
-- server.ts: /api/rankings/history/:date returns isTrading flag in response (already done)
-- AIStockIntelligenceTab: RankHistorySnapshot interface gets isTrading?: boolean
-- AIStockIntelligenceTab: annotated state stores {date, isTrading}[] from dates endpoint
-- AIStockIntelligenceTab: date dropdown labels trading days with 📈 and non-trading with 📅
-- AIStockIntelligenceTab: amber banner shown if snapshot.isTrading === false (safety net for old data)
+server.ts:
+- New GET /api/rankings/history/outcomes/:date?horizon=5|10|20
+  - nTradingDaysAfter() skips weekends + NSE holidays correctly
+  - syntheticPrice() reproduces seeded closing price for any (symbol, sector, date)
+  - Returns per-stock: entry price, exit price, % change, hit/miss
+  - Returns accuracy stats: overall hit rate, strong buy hit rate, avg return per signal type
+  - Returns horizonAvailable: false when outcome date is still in the future
+
+AIStockIntelligenceTab.tsx:
+- New interfaces: OutcomeRow, OutcomeAccuracy, OutcomeData
+- New state: horizon (5/10/20), outcomes, outcomesLoading
+- View toggle now has 4 tabs: Rankings | Sectors | Stock Trend | Outcomes
+- Outcomes view:
+  - Horizon selector (5D / 10D / 20D trading days)
+  - "Not yet available" state when outcome date is in the future
+  - Accuracy KPI strip: overall hit rate, strong buy hit rate, avg return SB, avg return BUY
+  - Per-stock table sorted by return: entry ₹, exit ₹, % return, HIT/MISS badge
+  - Only shows BUY/STRONG BUY signals (the actionable predictions)

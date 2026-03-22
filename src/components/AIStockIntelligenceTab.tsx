@@ -2137,6 +2137,23 @@ interface RankTrend {
   trend: RankHistoryRow[];
 }
 
+interface OutcomeRow {
+  rank: number; symbol: string; sector: string; signal: string; confidence: string;
+  final_score: number; priceAtSnapshot: number; priceAtOutcome: number | null;
+  pctChange: number | null; hit: boolean | null;
+}
+
+interface OutcomeAccuracy {
+  overallHitRate: number; strongBuyHitRate: number; buyHitRate: number;
+  avgReturnStrongBuy: number; avgReturnBuy: number; avgReturnAll: number;
+  totalStocks: number; strongBuyCount: number; buyCount: number;
+}
+
+interface OutcomeData {
+  snapshotDate: string; outcomeDate: string; horizon: number;
+  horizonAvailable: boolean; outcomes: OutcomeRow[]; accuracy: OutcomeAccuracy | null;
+}
+
 function RankingsHistoryPanel() {
   const [dates, setDates] = useState<string[]>([]);
   const [annotated, setAnnotated] = useState<{ date: string; isTrading: boolean }[]>([]);
@@ -2147,10 +2164,13 @@ function RankingsHistoryPanel() {
   const [searchSymbol, setSearchSymbol] = useState('');
   const [trend, setTrend] = useState<RankTrend | null>(null);
   const [trendLoading, setTrendLoading] = useState(false);
-  const [view, setView] = useState<'snapshot' | 'trend' | 'sectors'>('snapshot');
+  const [view, setView] = useState<'snapshot' | 'trend' | 'sectors' | 'outcomes'>('snapshot');
   const [signalFilter, setSignalFilter] = useState('ALL');
   const [compareDate, setCompareDate] = useState('');
   const [compareSnapshot, setCompareSnapshot] = useState<RankHistorySnapshot | null>(null);
+  const [horizon, setHorizon] = useState(5);
+  const [outcomes, setOutcomes] = useState<OutcomeData | null>(null);
+  const [outcomesLoading, setOutcomesLoading] = useState(false);
 
   // Load available dates
   useEffect(() => {
@@ -2187,6 +2207,18 @@ function RankingsHistoryPanel() {
       .then(setCompareSnapshot)
       .catch(() => {});
   }, [compareDate]);
+
+  // Load outcomes when view is outcomes or when horizon/date changes while on outcomes view
+  useEffect(() => {
+    if (view !== 'outcomes' || !selectedDate) return;
+    setOutcomesLoading(true);
+    setOutcomes(null);
+    fetch(`/api/rankings/history/outcomes/${selectedDate}?horizon=${horizon}`)
+      .then(r => r.json())
+      .then(setOutcomes)
+      .catch(() => {})
+      .finally(() => setOutcomesLoading(false));
+  }, [view, selectedDate, horizon]);
 
   const loadTrend = (sym: string) => {
     if (!sym) return;
@@ -2264,10 +2296,10 @@ function RankingsHistoryPanel() {
 
         {/* View toggle */}
         <div className="flex rounded-xl border border-white/10 bg-white/5 p-0.5 gap-0.5">
-          {(['snapshot', 'sectors', 'trend'] as const).map(v => (
+          {(['snapshot', 'sectors', 'trend', 'outcomes'] as const).map(v => (
             <button key={v} onClick={() => setView(v)}
               className={`rounded-lg px-3 py-1 text-[9px] font-black uppercase tracking-[0.1em] transition-all ${view === v ? 'bg-violet-500/20 text-violet-300' : 'text-white/30 hover:text-white/60'}`}>
-              {v === 'snapshot' ? 'Rankings' : v === 'sectors' ? 'Sectors' : 'Stock Trend'}
+              {v === 'snapshot' ? 'Rankings' : v === 'sectors' ? 'Sectors' : v === 'trend' ? 'Stock Trend' : '🎯 Outcomes'}
             </button>
           ))}
         </div>
@@ -2604,6 +2636,135 @@ function RankingsHistoryPanel() {
               <Eye size={24} className="opacity-30" />
               <p className="text-sm font-bold">Enter a stock symbol to track its ranking history</p>
               <p className="text-[10px]">Click any symbol in the Rankings view to auto-load its trend</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── OUTCOMES VIEW ── */}
+      {view === 'outcomes' && (
+        <div className="space-y-4">
+          {/* Horizon selector */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[9px] font-black uppercase tracking-[0.12em] text-white/30">Outcome after</span>
+            {[5, 10, 20].map(h => (
+              <button key={h} onClick={() => setHorizon(h)}
+                className={`rounded-lg px-3 py-1 text-[9px] font-black uppercase tracking-[0.1em] border transition-all ${
+                  horizon === h ? 'bg-violet-500/20 text-violet-300 border-violet-500/30' : 'text-white/30 border-white/10 hover:text-white/60'
+                }`}>
+                {h}D
+              </button>
+            ))}
+            <span className="text-[9px] text-white/20 ml-1">trading days</span>
+          </div>
+
+          {outcomesLoading && (
+            <div className="flex items-center justify-center gap-2 py-12 text-white/30">
+              <RefreshCw size={16} className="animate-spin" />
+              <span className="text-sm font-bold">Computing outcomes...</span>
+            </div>
+          )}
+
+          {!outcomesLoading && outcomes && !outcomes.horizonAvailable && (
+            <div className="rounded-2xl border border-amber-500/20 bg-amber-500/[0.05] p-6 flex flex-col items-center gap-3 text-center">
+              <MoonStar size={24} className="text-amber-400/60" />
+              <p className="text-sm font-black text-amber-300/80">Outcome not yet available</p>
+              <p className="text-[11px] text-amber-300/50">
+                The {horizon}-trading-day outcome date is <span className="font-black text-amber-300/80">{outcomes.outcomeDate}</span>, which is in the future.
+                Check back after that date to see how the predictions performed.
+              </p>
+            </div>
+          )}
+
+          {!outcomesLoading && outcomes && outcomes.horizonAvailable && outcomes.accuracy && (
+            <div className="space-y-4">
+              {/* Accuracy KPI strip */}
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {[
+                  { label: 'Overall Hit Rate', value: `${outcomes.accuracy.overallHitRate}%`,
+                    color: outcomes.accuracy.overallHitRate >= 60 ? 'text-emerald-400' : outcomes.accuracy.overallHitRate >= 45 ? 'text-amber-400' : 'text-rose-400',
+                    sub: `${outcomes.accuracy.totalStocks} signals` },
+                  { label: 'Strong Buy Hit', value: `${outcomes.accuracy.strongBuyHitRate}%`,
+                    color: outcomes.accuracy.strongBuyHitRate >= 65 ? 'text-emerald-400' : 'text-amber-400',
+                    sub: `${outcomes.accuracy.strongBuyCount} stocks` },
+                  { label: 'Avg Return (SB)', value: `${outcomes.accuracy.avgReturnStrongBuy > 0 ? '+' : ''}${outcomes.accuracy.avgReturnStrongBuy}%`,
+                    color: outcomes.accuracy.avgReturnStrongBuy > 0 ? 'text-emerald-400' : 'text-rose-400',
+                    sub: `${horizon}D horizon` },
+                  { label: 'Avg Return (BUY)', value: `${outcomes.accuracy.avgReturnBuy > 0 ? '+' : ''}${outcomes.accuracy.avgReturnBuy}%`,
+                    color: outcomes.accuracy.avgReturnBuy > 0 ? 'text-emerald-400' : 'text-rose-400',
+                    sub: `${outcomes.accuracy.buyCount} stocks` },
+                ].map(k => (
+                  <div key={k.label} className="rounded-2xl border border-white/5 bg-white/[0.03] px-3 py-2.5 text-center">
+                    <p className={`text-xl font-black ${k.color}`}>{k.value}</p>
+                    <p className="text-[8px] font-bold uppercase tracking-[0.12em] text-white/25 mt-0.5">{k.label}</p>
+                    <p className="text-[8px] text-white/15 mt-0.5">{k.sub}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Outcome info banner */}
+              <div className="rounded-xl border border-violet-500/20 bg-violet-500/[0.05] px-3 py-2 flex items-center gap-2">
+                <ArrowUpRight size={12} className="text-violet-400 shrink-0" />
+                <p className="text-[10px] text-violet-300/80">
+                  Snapshot: <span className="font-black">{fmtDate(outcomes.snapshotDate)}</span> →
+                  Outcome: <span className="font-black">{fmtDate(outcomes.outcomeDate)}</span>
+                  <span className="text-violet-300/40 ml-2">({horizon} trading days)</span>
+                </p>
+              </div>
+
+              {/* Per-stock outcome table */}
+              <div className="overflow-x-auto rounded-2xl border border-white/5">
+                <table className="w-full text-[11px]">
+                  <thead>
+                    <tr className="border-b border-white/5 bg-white/[0.03]">
+                      <th className="px-3 py-2.5 text-left font-black uppercase tracking-[0.12em] text-white/30">#</th>
+                      <th className="px-3 py-2.5 text-left font-black uppercase tracking-[0.12em] text-white/30">Symbol</th>
+                      <th className="px-3 py-2.5 text-left font-black uppercase tracking-[0.12em] text-white/30">Signal</th>
+                      <th className="px-3 py-2.5 text-left font-black uppercase tracking-[0.12em] text-white/30">Score</th>
+                      <th className="px-3 py-2.5 text-left font-black uppercase tracking-[0.12em] text-white/30">Entry ₹</th>
+                      <th className="px-3 py-2.5 text-left font-black uppercase tracking-[0.12em] text-white/30">Exit ₹</th>
+                      <th className="px-3 py-2.5 text-left font-black uppercase tracking-[0.12em] text-white/30">Return</th>
+                      <th className="px-3 py-2.5 text-left font-black uppercase tracking-[0.12em] text-white/30">Result</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {outcomes.outcomes
+                      .filter(o => o.signal === 'STRONG BUY' || o.signal === 'BUY')
+                      .sort((a, b) => (b.pctChange ?? 0) - (a.pctChange ?? 0))
+                      .map(o => (
+                        <tr key={o.symbol} className={`border-b border-white/5 hover:bg-white/[0.02] ${o.hit ? 'bg-emerald-500/[0.02]' : 'bg-rose-500/[0.02]'}`}>
+                          <td className="px-3 py-2 text-white/30 font-mono text-[10px]">{o.rank}</td>
+                          <td className="px-3 py-2">
+                            <div>
+                              <span className="font-black text-white">{o.symbol}</span>
+                              <span className="text-white/25 text-[9px] ml-1.5">{o.sector}</span>
+                            </div>
+                          </td>
+                          <td className="px-3 py-2"><SignalBadge signal={o.signal} /></td>
+                          <td className="px-3 py-2 font-bold text-emerald-400">{Math.round(o.final_score * 100)}</td>
+                          <td className="px-3 py-2 font-mono text-white/60">₹{o.priceAtSnapshot.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
+                          <td className="px-3 py-2 font-mono text-white/60">
+                            {o.priceAtOutcome !== null ? `₹${o.priceAtOutcome.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : '—'}
+                          </td>
+                          <td className="px-3 py-2">
+                            {o.pctChange !== null ? (
+                              <span className={`font-black text-[11px] ${o.pctChange > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {o.pctChange > 0 ? '+' : ''}{o.pctChange}%
+                              </span>
+                            ) : '—'}
+                          </td>
+                          <td className="px-3 py-2">
+                            {o.hit === true ? (
+                              <span className="text-[9px] font-black text-emerald-400 bg-emerald-500/10 rounded px-1.5 py-0.5">✓ HIT</span>
+                            ) : o.hit === false ? (
+                              <span className="text-[9px] font-black text-rose-400 bg-rose-500/10 rounded px-1.5 py-0.5">✗ MISS</span>
+                            ) : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>

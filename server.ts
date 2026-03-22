@@ -5125,6 +5125,96 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
+  // ── Outcome Tracker ──────────────────────────────────────────────────────
+  // For a given snapshot date + horizon (5/10/20 trading days), compute
+  // whether each ranked stock's signal was correct by comparing synthetic
+  // price on snapshot day vs. price on the outcome day.
+  app.get("/api/rankings/history/outcomes/:date", async (req, res) => {
+    try {
+      const snapshotDate = req.params.date;
+      const horizon = Math.min(30, Math.max(1, parseInt(String(req.query.horizon ?? '5'), 10)));
+
+      // Advance N trading days (skip weekends + NSE holidays)
+      const nTradingDaysAfter = (fromDate: string, n: number): string => {
+        let d = new Date(fromDate + 'T12:00:00+05:30');
+        let count = 0;
+        while (count < n) {
+          d.setDate(d.getDate() + 1);
+          if (isMarketDay(d)) count++;
+        }
+        return d.toISOString().slice(0, 10);
+      };
+
+      const outcomeDate = nTradingDaysAfter(snapshotDate, horizon);
+      const today = istNow().toISOString().slice(0, 10);
+      const horizonAvailable = outcomeDate <= today;
+
+      // Reproduce the seeded closing price for any (symbol, sector, dateStr).
+      // Uses the exact same generator as buildAIIntelligenceDashboard.
+      const syntheticPrice = (symbol: string, sector: string, dateStr: string): number => {
+        const dateSeed = parseInt(dateStr.replace(/-/g, ''), 10);
+        const rng = seededGenerator((symbolSeed(symbol) ^ 0xdeadbeef) ^ (dateSeed >>> 0));
+        const sectorDrift: Record<string, number> = {
+          Technology: 0.00165, Financials: 0.0012, Energy: 0.0011,
+          Healthcare: 0.00145, Consumer: 0.00115, Industrials: 0.00105,
+          Telecom: 0.001, Materials: 0.00095,
+        };
+        const drift0 = sectorDrift[sector] ?? 0.001;
+        let price = 80 + rng() * 1800;
+        for (let d = 0; d < 260; d++) {
+          const drift = drift0 + Math.sin(d / 31 + rng()) * 0.006 + (rng() - 0.5) * 0.05;
+          price = Math.max(20, price * (1 + drift));
+        }
+        return price;
+      };
+
+      const rows = await getRankingsByDate(snapshotDate);
+      if (!rows.length) return res.json({ snapshotDate, outcomeDate, horizon, horizonAvailable, outcomes: [], accuracy: null });
+
+      const outcomes = rows.map(r => {
+        const p0 = syntheticPrice(r.symbol, r.sector, snapshotDate);
+        const p1 = horizonAvailable ? syntheticPrice(r.symbol, r.sector, outcomeDate) : null;
+        const pctChange = p1 !== null ? +((p1 - p0) / p0 * 100).toFixed(2) : null;
+        // A BUY/STRONG BUY is a "hit" if price went up; SELL is a hit if price went down
+        const hit = pctChange !== null
+          ? (r.signal === 'STRONG BUY' || r.signal === 'BUY') ? pctChange > 0
+            : r.signal === 'SELL' ? pctChange < 0
+            : null
+          : null;
+        return { rank: r.rank, symbol: r.symbol, sector: r.sector, signal: r.signal, confidence: r.confidence,
+          final_score: r.final_score, priceAtSnapshot: +p0.toFixed(2),
+          priceAtOutcome: p1 !== null ? +p1.toFixed(2) : null, pctChange, hit };
+      });
+
+      // Accuracy stats (only when outcome is available)
+      let accuracy = null;
+      if (horizonAvailable) {
+        const buySignals = outcomes.filter(o => o.signal === 'STRONG BUY' || o.signal === 'BUY');
+        const strongBuys = outcomes.filter(o => o.signal === 'STRONG BUY');
+        const buys = outcomes.filter(o => o.signal === 'BUY');
+        const hitCount = outcomes.filter(o => o.hit === true).length;
+        const totalSignaled = outcomes.filter(o => o.hit !== null).length;
+        const avgReturn = (arr: typeof outcomes) => arr.length
+          ? +(arr.reduce((s, o) => s + (o.pctChange ?? 0), 0) / arr.length).toFixed(2) : 0;
+        accuracy = {
+          overallHitRate: totalSignaled > 0 ? +(hitCount / totalSignaled * 100).toFixed(1) : 0,
+          strongBuyHitRate: strongBuys.length > 0
+            ? +(strongBuys.filter(o => o.hit).length / strongBuys.length * 100).toFixed(1) : 0,
+          buyHitRate: buys.length > 0
+            ? +(buys.filter(o => o.hit).length / buys.length * 100).toFixed(1) : 0,
+          avgReturnStrongBuy: avgReturn(strongBuys),
+          avgReturnBuy: avgReturn(buys),
+          avgReturnAll: avgReturn(buySignals),
+          totalStocks: outcomes.length,
+          strongBuyCount: strongBuys.length,
+          buyCount: buys.length,
+        };
+      }
+
+      res.json({ snapshotDate, outcomeDate, horizon, horizonAvailable, outcomes, accuracy });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
   // Trigger snapshot save (called internally after dashboard build on trading days)
   app.post("/api/rankings/history/save", express.json(), async (req, res) => {
     try {
