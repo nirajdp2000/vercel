@@ -1,1 +1,9 @@
-fix: save rankings history every day not just trading days
+feat: skip rankings snapshot on weekends/holidays, label dates in history dropdown
+
+- server.ts: saveRankingsSnapshot now guarded by isMarketDay() — no saves on weekends or NSE holidays
+- server.ts: /api/rankings/history/dates returns annotated[] with isTrading flag (already done)
+- server.ts: /api/rankings/history/:date returns isTrading flag in response (already done)
+- AIStockIntelligenceTab: RankHistorySnapshot interface gets isTrading?: boolean
+- AIStockIntelligenceTab: annotated state stores {date, isTrading}[] from dates endpoint
+- AIStockIntelligenceTab: date dropdown labels trading days with 📈 and non-trading with 📅
+- AIStockIntelligenceTab: amber banner shown if snapshot.isTrading === false (safety net for old data)

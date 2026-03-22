@@ -2126,6 +2126,7 @@ interface RankHistoryRow {
 
 interface RankHistorySnapshot {
   date: string;
+  isTrading?: boolean;
   rankings: RankHistoryRow[];
   sectors: { sector: string; count: number; strongBuy: number; buy: number; avgScore: number }[];
   summary: { total: number; strongBuy: number; buy: number; earlyRally: number; avgScore: number };
@@ -2138,6 +2139,7 @@ interface RankTrend {
 
 function RankingsHistoryPanel() {
   const [dates, setDates] = useState<string[]>([]);
+  const [annotated, setAnnotated] = useState<{ date: string; isTrading: boolean }[]>([]);
   const [selectedDate, setSelectedDate] = useState('');
   const [snapshot, setSnapshot] = useState<RankHistorySnapshot | null>(null);
   const [loading, setLoading] = useState(false);
@@ -2158,6 +2160,7 @@ function RankingsHistoryPanel() {
       .then(d => {
         const ds: string[] = d.dates || [];
         setDates(ds);
+        setAnnotated(d.annotated || []);
         if (ds.length > 0) { setSelectedDate(ds[0]); }
       })
       .catch(() => {})
@@ -2238,7 +2241,11 @@ function RankingsHistoryPanel() {
             onChange={e => setSelectedDate(e.target.value)}
             className="bg-transparent text-[11px] text-white outline-none"
           >
-            {dates.map(d => <option key={d} value={d}>{fmtDate(d)}</option>)}
+            {dates.map(d => {
+              const ann = annotated.find(a => a.date === d);
+              const label = ann?.isTrading === false ? '📅 ' : '📈 ';
+              return <option key={d} value={d}>{label}{fmtDate(d)}</option>;
+            })}
           </select>
         </div>
 
@@ -2283,6 +2290,14 @@ function RankingsHistoryPanel() {
               <p className="text-[8px] font-bold uppercase tracking-[0.12em] text-white/25 mt-0.5">{k.label}</p>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* ── Non-trading day notice ── */}
+      {snapshot && snapshot.isTrading === false && (
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.06] px-3 py-2 flex items-center gap-2">
+          <MoonStar size={12} className="text-amber-400 shrink-0" />
+          <p className="text-[10px] text-amber-300/80">Weekend / holiday — market was closed. No new snapshot is saved on non-trading days.</p>
         </div>
       )}
 

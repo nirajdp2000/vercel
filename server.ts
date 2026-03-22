@@ -4356,13 +4356,13 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
     try {
       const base = await buildAIIntelligenceDashboard();
       const enriched = await enrichDashboardWithGemini(base);
-      // Auto-save rankings snapshot every day (not just trading days).
-      // On non-trading days the data is synthetic but still useful for history.
-      // Deduplicated by date — safe to call multiple times.
-      const today = new Date().toISOString().slice(0, 10);
-      saveRankingsSnapshot(today, base.rankings.slice(0, 50)).catch(e =>
-        console.error('[RankingsHistory] auto-save error:', e.message)
-      );
+      // Auto-save rankings snapshot only on trading days (market is closed on weekends/holidays).
+      if (isMarketDay()) {
+        const today = new Date().toISOString().slice(0, 10);
+        saveRankingsSnapshot(today, base.rankings.slice(0, 50)).catch(e =>
+          console.error('[RankingsHistory] auto-save error:', e.message)
+        );
+      }
       res.json(enriched);
     } catch (err: any) {
       logError("ai-intelligence.dashboard.failed", err);
@@ -4374,11 +4374,13 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
     try {
       const base = await buildAIIntelligenceDashboard(true);
       const enriched = await enrichDashboardWithGemini(base, true);
-      // Auto-save on every refresh (trading day or not)
-      const today = new Date().toISOString().slice(0, 10);
-      saveRankingsSnapshot(today, base.rankings.slice(0, 50)).catch(e =>
-        console.error('[RankingsHistory] auto-save error:', e.message)
-      );
+      // Auto-save only on trading days
+      if (isMarketDay()) {
+        const today = new Date().toISOString().slice(0, 10);
+        saveRankingsSnapshot(today, base.rankings.slice(0, 50)).catch(e =>
+          console.error('[RankingsHistory] auto-save error:', e.message)
+        );
+      }
       res.json(enriched);
     } catch (err: any) {
       logError("ai-intelligence.refresh.failed", err);
@@ -5069,13 +5071,23 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
   // Trigger snapshot save (called internally after dashboard build on trading days)
 
   app.get("/api/rankings/history/dates", async (_req, res) => {
-    try { res.json({ dates: await getRankingsDates() }); }
-    catch { res.json({ dates: [] }); }
+    try {
+      const dates = await getRankingsDates();
+      // Annotate each date with trading-day status so the frontend can label them
+      const annotated = dates.map(d => ({
+        date: d,
+        isTrading: isMarketDay(new Date(d + 'T12:00:00+05:30')), // noon IST avoids TZ edge cases
+      }));
+      res.json({ dates, annotated });
+    }
+    catch { res.json({ dates: [], annotated: [] }); }
   });
 
   app.get("/api/rankings/history/:date", async (req, res) => {
     try {
-      const rows = await getRankingsByDate(req.params.date);
+      const dateStr = req.params.date;
+      const rows = await getRankingsByDate(dateStr);
+      const tradingDay = isMarketDay(new Date(dateStr + 'T12:00:00+05:30'));
       // Compute sector breakdown for this snapshot
       const sectorMap: Record<string, { count: number; strongBuy: number; buy: number; avgScore: number }> = {};
       rows.forEach(r => {
@@ -5091,7 +5103,8 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
       })).sort((a, b) => b.avgScore - a.avgScore);
 
       res.json({
-        date: req.params.date,
+        date: dateStr,
+        isTrading: tradingDay,
         rankings: rows,
         sectors,
         summary: {
