@@ -48,6 +48,8 @@ import AIStockIntelligenceTab from './components/AIStockIntelligenceTab';
 import AssetSearch from './components/AssetSearch';
 import AnalyticsFilters, { FilterState, DEFAULT_FILTERS } from './components/AnalyticsFilters';
 import TerminalLayout from './components/TerminalLayout';
+import ParticleCanvas from './components/ParticleCanvas';
+import AmbientOrbs from './components/AmbientOrbs';
 import { fetchJson } from './lib/api';
 
 /** Strip NSE_EQ| / BSE_EQ| / NSE_EQ: / BSE_EQ: prefixes for clean display */
@@ -773,6 +775,10 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0A0A0B] text-zinc-100 font-sans selection:bg-indigo-500/30 overflow-x-hidden">
+      {/* ── VFX Layer ── */}
+      <AmbientOrbs />
+      <ParticleCanvas />
+
       {/* Market Ticker */}
       <div className="bg-black/40 border-b border-white/[0.05] py-0 overflow-hidden whitespace-nowrap h-8 flex items-center relative">
         {/* left fade */}
@@ -802,7 +808,7 @@ export default function App() {
       </div>
 
       {/* Header */}
-      <header className="sticky top-0 z-50 border-b border-white/[0.06] bg-[#0a0a0c]/80 backdrop-blur-2xl shadow-[0_8px_40px_rgba(0,0,0,0.7)]">
+      <header className="sticky top-0 z-50 border-b border-white/[0.06] bg-[#0a0a0c]/80 backdrop-blur-2xl shadow-[0_8px_40px_rgba(0,0,0,0.7)] scan-line-container">
         {/* subtle top glow line */}
         <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-indigo-500/50 to-transparent" />
 
@@ -811,18 +817,19 @@ export default function App() {
           {/* ── Logo ── */}
           <div className="flex items-center gap-3 shrink-0">
             <div className="relative w-10 h-10">
-              <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-purple-600 shadow-[0_0_20px_rgba(99,102,241,0.5)]" />
+              <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-purple-600 shadow-[0_0_24px_rgba(99,102,241,0.6)]" />
               <div className="absolute inset-0 rounded-2xl flex items-center justify-center">
                 <TrendingUp className="text-white w-5 h-5 drop-shadow" />
               </div>
-              {/* pulse ring */}
-              <div className="absolute -inset-0.5 rounded-2xl border border-indigo-400/30 animate-pulse" />
+              {/* double pulse ring */}
+              <div className="absolute -inset-0.5 rounded-2xl border border-indigo-400/40 animate-pulse" />
+              <div className="absolute -inset-1.5 rounded-2xl border border-indigo-400/10 animate-pulse" style={{ animationDelay: '0.5s' }} />
             </div>
             <div>
-              <h1 className="text-[17px] font-black tracking-tight leading-none bg-gradient-to-r from-white via-white/90 to-indigo-200 bg-clip-text text-transparent">
+              <h1 className="text-[17px] font-black tracking-tight leading-none text-shimmer">
                 StockPulse
               </h1>
-              <p className="text-[8px] text-indigo-400/50 font-bold uppercase tracking-[0.25em] mt-0.5">Premium Terminal</p>
+              <p className="text-[8px] text-indigo-400/60 font-bold uppercase tracking-[0.25em] mt-0.5 animate-neon-flicker">Premium Terminal</p>
             </div>
           </div>
 
@@ -959,14 +966,15 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-[1600px] mx-auto px-3 py-4 overflow-x-hidden">
+      <main className="max-w-[1600px] mx-auto px-3 py-4 overflow-x-hidden relative z-10">
         {isUltraQuantTab ? (
-          <UltraQuantTab />
+          <div key="ultraQuant" className="animate-float-in"><UltraQuantTab /></div>
         ) : isMultibaggerTab ? (
-          <MultibaggerScanner />
+          <div key="multibagger" className="animate-float-in"><MultibaggerScanner /></div>
         ) : activeTab === 'aiIntelligence' ? (
-          <AIStockIntelligenceTab />
+          <div key="aiIntelligence" className="animate-float-in"><AIStockIntelligenceTab /></div>
         ) : activeTab === 'institutional' ? (
+          <div key="institutional" className="animate-float-in">
           <InstitutionalAnalytics
             symbol={selectedStock?.symbol || 'MARKET'}
             instrumentKey={selectedStock?.key}
@@ -981,7 +989,9 @@ export default function App() {
             aiSources={aiSources}
             aiHedgeFund={aiHedgeFund}
           />
+          </div>
         ) : (
+        <div key="terminal" className="animate-float-in">
         <TerminalLayout
           query={query} setQuery={setQuery}
           selectedStock={selectedStock} setSelectedStock={setSelectedStock}
@@ -1012,6 +1022,7 @@ export default function App() {
           quantShellClass={quantShellClass} quantSubPanelClass={quantSubPanelClass} isDeskLight={isDeskLight}
           mdLastUpdated={mdLastUpdated}
         />
+        </div>
         )}
       </main>
 

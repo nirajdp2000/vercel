@@ -1,6 +1,12 @@
-ui: label simulated data in AI Intelligence Rankings tab
+feat: add VFX/graphics layer to app UI
 
-- Added amber warning banner in RankingsTable explaining that stock
-  symbols are real NSE/BSE but prices/scores are AI-simulated
-- Added [SIM] tag to each ticker item in LiveTickerStrip
-- Renamed Chg% column header to Chg%~ to indicate simulated value
+- ParticleCanvas: animated floating particles with connection lines (canvas-based, fixed background)
+- AmbientOrbs: 5 slowly drifting radial gradient orbs (indigo/violet/cyan/emerald)
+- CSS keyframe animations: orb-drift, scan-line, shimmer-x, border-glow-pulse, float-up, neon-flicker, holo-rotate
+- New utility classes: text-shimmer, animate-float-in, animate-neon-flicker, scan-line-container, holo-card, border-glow-animated, border-pulse-indigo/emerald, glow-*-strong
+- Logo title uses text-shimmer animated gradient
+- "Premium Terminal" subtitle uses neon-flicker
+- Logo icon has double pulse ring
+- Header has scan-line sweep effect
+- All tab content fades in with animate-float-in on switch
+- Zero impact on existing functionality
