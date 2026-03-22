@@ -647,18 +647,25 @@ setFallbackUniverse(NSE_STOCK_UNIVERSE.map(s => ({
 })));
 
 const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
-  // Use the curated NSE_STOCK_UNIVERSE for all scoring/ranking engines.
-  // This universe has verified sector, industry, marketCap, and averageVolume data.
-  // The Supabase universe (5221 stocks) is used only for search/autocomplete — it
-  // contains many micro-cap BSE stocks with undefined marketCap and wrong sectors
-  // which would pollute the rankings with unknown stocks.
-  return NSE_STOCK_UNIVERSE.map(s => ({
-    symbol:        s.symbol,
-    sector:        s.sector,
-    industry:      s.industry,
-    marketCap:     s.marketCap,
-    averageVolume: s.averageVolume,
-  }));
+  // Use the full Supabase universe (5221 NSE+BSE stocks).
+  // Missing fields are filled with sensible defaults so scoring engines work correctly.
+  // NSE_STOCK_UNIVERSE is used as an enrichment overlay — if a symbol exists in both,
+  // the curated data (sector/industry/marketCap/volume) takes priority.
+  const supabaseStocks = await getUniverseAsync();
+
+  // Build a lookup map from the curated list for enrichment
+  const curatedMap = new Map(NSE_STOCK_UNIVERSE.map(s => [s.symbol, s]));
+
+  return supabaseStocks.map(s => {
+    const curated = curatedMap.get(s.symbol);
+    return {
+      symbol:        s.symbol,
+      sector:        curated?.sector  || s.sector  || 'Unknown',
+      industry:      curated?.industry || s.industry || 'Unknown',
+      marketCap:     curated?.marketCap     || (s.marketCap     > 0 ? s.marketCap     : 1000),
+      averageVolume: curated?.averageVolume || (s.averageVolume > 0 ? s.averageVolume : 100000),
+    };
+  });
 };
 
 
@@ -4725,9 +4732,8 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
     if (predRunning) return;
     predRunning = true;
     try {
-      // Use curated NSE_STOCK_UNIVERSE (434 stocks) — same as all other scan engines.
-      // The Supabase universe (5221 stocks) is for search/autocomplete only.
-      const universe = NSE_STOCK_UNIVERSE;
+      // Use full Supabase universe (5221 NSE+BSE stocks) — same as all other scan engines.
+      const universe = await getUniverseAsync();
       if (universe.length === 0) { predRunning = false; return; }
 
       const bullish: any[] = [];

@@ -1,14 +1,13 @@
-fix: all scan engines now use curated 434-stock universe (not 5221)
+feat: scan all 5221 NSE+BSE stocks across all engines
 
-Root cause: runPredictionScan() was using getUniverseAsync() which
-returns 5221 stocks from Supabase (search/autocomplete universe).
-This caused Live Predictions tab to show totalScanned=5221.
+Updated createUltraQuantUniverse() to use the full Supabase universe
+(5221 stocks) instead of the hardcoded 434-stock curated list.
 
-Fix: switched runPredictionScan() to use NSE_STOCK_UNIVERSE directly
-(434 curated stocks), consistent with AI Intelligence, Multibagger,
-and UltraQuant engines.
+- Curated NSE_STOCK_UNIVERSE is now used as an enrichment overlay:
+  if a symbol exists in both, curated sector/industry/marketCap/volume
+  takes priority; otherwise Supabase data is used with safe defaults.
+- runPredictionScan() also switched back to getUniverseAsync() (5221).
+- All scan engines (AI Intelligence, Multibagger, UltraQuant, Live
+  Predictions) now show universe = 5221.
 
-Also removed 6 duplicate entries from NSE_STOCK_UNIVERSE (440 → 434):
-MARICO, MUTHOOTFIN, AMBUJACEM, ATUL, DELHIVERY, KANSAINER.
-
-All scan engines now consistently show universe=434.
+Verified: Multibagger scannedUniverse=5221, UltraQuant totalLoaded=5221
