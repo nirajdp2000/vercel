@@ -14,6 +14,7 @@ import { UpstoxService } from "./src/services/upstox/UpstoxService";
 import { UpstoxMarketDataService } from "./src/services/upstox/UpstoxMarketDataService";
 import { OrbVwapEngine } from "./src/services/upstox/OrbVwapEngine";
 import { PredictionStorageService } from "./src/services/PredictionStorageService";
+import { getSupabaseClient } from "./src/lib/supabase";
 import { fetchNewsIntelligence, getStockSentiment, getTopNews, getSectorSentiment } from "./src/services/NewsIntelligenceService";
 
 import path from "path";
@@ -4011,6 +4012,13 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
     try {
       const base = await buildAIIntelligenceDashboard();
       const enriched = await enrichDashboardWithGemini(base);
+      // Auto-save rankings snapshot on trading days (fire-and-forget, non-blocking)
+      if (base.marketDay) {
+        const today = new Date().toISOString().slice(0, 10);
+        saveRankingsSnapshot(today, base.rankings.slice(0, 50)).catch(e =>
+          console.error('[RankingsHistory] auto-save error:', e.message)
+        );
+      }
       res.json(enriched);
     } catch (err: any) {
       logError("ai-intelligence.dashboard.failed", err);
@@ -4022,6 +4030,13 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
     try {
       const base = await buildAIIntelligenceDashboard(true);
       const enriched = await enrichDashboardWithGemini(base, true);
+      // Auto-save on trading days
+      if (base.marketDay) {
+        const today = new Date().toISOString().slice(0, 10);
+        saveRankingsSnapshot(today, base.rankings.slice(0, 50)).catch(e =>
+          console.error('[RankingsHistory] auto-save error:', e.message)
+        );
+      }
       res.json(enriched);
     } catch (err: any) {
       logError("ai-intelligence.refresh.failed", err);
@@ -4616,6 +4631,152 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
+  });
+
+  // ─── Rankings History Engine ──────────────────────────────────────────────
+  // Stores daily top-50 snapshot on trading days for historical tracking.
+  // Schema (Supabase table: rankings_history):
+  //   id, snapshot_date, symbol, sector, rank, signal, confidence,
+  //   final_score, rally_score, inst_score, ai_score, quant_score,
+  //   early_rally_signal, market_regime, created_at
+
+  // In-memory store (fallback when Supabase unavailable)
+  const rankingsMemory: any[] = [];
+
+  async function saveRankingsSnapshot(date: string, top50: any[]): Promise<void> {
+    const now = Date.now();
+    const rows = top50.map(r => ({
+      snapshot_date: date,
+      symbol: r.symbol,
+      sector: r.sector,
+      rank: r.rank,
+      signal: r.signal,
+      confidence: r.confidence,
+      final_score: +r.finalScore.toFixed(4),
+      rally_score: +r.rallyProbabilityScore.toFixed(4),
+      inst_score: +r.institutionalScore.toFixed(4),
+      ai_score: +r.aiPredictionScore.toFixed(4),
+      quant_score: +r.quantFilterScore.toFixed(4),
+      early_rally_signal: r.earlyRallySignal,
+      market_regime: r.marketRegime,
+      created_at: now,
+    }));
+
+    const sb = getSupabaseClient();
+    if (sb) {
+      try {
+        await sb.from('rankings_history').delete().eq('snapshot_date', date);
+        const { error } = await sb.from('rankings_history').insert(rows);
+        if (!error) { console.log(`[RankingsHistory] Saved ${rows.length} rows for ${date}`); return; }
+        console.error('[RankingsHistory] Supabase insert error:', error.message);
+      } catch (e: any) { console.error('[RankingsHistory] Supabase exception:', e.message); }
+    }
+    // Memory fallback
+    const keep = rankingsMemory.filter(r => r.snapshot_date !== date);
+    rankingsMemory.length = 0;
+    rankingsMemory.push(...keep, ...rows);
+    console.log(`[RankingsHistory] Saved ${rows.length} rows to memory for ${date}`);
+  }
+
+  async function getRankingsDates(): Promise<string[]> {
+    const sb = getSupabaseClient();
+    if (sb) {
+      try {
+        const { data, error } = await sb
+          .from('rankings_history').select('snapshot_date')
+          .order('snapshot_date', { ascending: false });
+        if (!error && data) return [...new Set(data.map((r: any) => r.snapshot_date as string))];
+      } catch {}
+    }
+    return [...new Set(rankingsMemory.map(r => r.snapshot_date))].sort().reverse();
+  }
+
+  async function getRankingsByDate(date: string): Promise<any[]> {
+    const sb = getSupabaseClient();
+    if (sb) {
+      try {
+        const { data, error } = await sb
+          .from('rankings_history').select('*')
+          .eq('snapshot_date', date)
+          .order('rank', { ascending: true });
+        if (!error && data) return data;
+      } catch {}
+    }
+    return rankingsMemory.filter(r => r.snapshot_date === date).sort((a, b) => a.rank - b.rank);
+  }
+
+  async function getRankingsTrend(symbol: string, limit = 30): Promise<any[]> {
+    const sb = getSupabaseClient();
+    if (sb) {
+      try {
+        const { data, error } = await sb
+          .from('rankings_history').select('*')
+          .eq('symbol', symbol)
+          .order('snapshot_date', { ascending: false })
+          .limit(limit);
+        if (!error && data) return data.reverse(); // oldest first for charting
+      } catch {}
+    }
+    return rankingsMemory
+      .filter(r => r.symbol === symbol)
+      .sort((a, b) => a.snapshot_date.localeCompare(b.snapshot_date))
+      .slice(-limit);
+  }
+
+  // Trigger snapshot save (called internally after dashboard build on trading days)
+
+  app.get("/api/rankings/history/dates", async (_req, res) => {
+    try { res.json({ dates: await getRankingsDates() }); }
+    catch { res.json({ dates: [] }); }
+  });
+
+  app.get("/api/rankings/history/:date", async (req, res) => {
+    try {
+      const rows = await getRankingsByDate(req.params.date);
+      // Compute sector breakdown for this snapshot
+      const sectorMap: Record<string, { count: number; strongBuy: number; buy: number; avgScore: number }> = {};
+      rows.forEach(r => {
+        if (!sectorMap[r.sector]) sectorMap[r.sector] = { count: 0, strongBuy: 0, buy: 0, avgScore: 0 };
+        sectorMap[r.sector].count++;
+        if (r.signal === 'STRONG BUY') sectorMap[r.sector].strongBuy++;
+        if (r.signal === 'BUY') sectorMap[r.sector].buy++;
+        sectorMap[r.sector].avgScore += r.final_score;
+      });
+      const sectors = Object.entries(sectorMap).map(([sector, v]) => ({
+        sector, count: v.count, strongBuy: v.strongBuy, buy: v.buy,
+        avgScore: +(v.avgScore / v.count).toFixed(3),
+      })).sort((a, b) => b.avgScore - a.avgScore);
+
+      res.json({
+        date: req.params.date,
+        rankings: rows,
+        sectors,
+        summary: {
+          total: rows.length,
+          strongBuy: rows.filter(r => r.signal === 'STRONG BUY').length,
+          buy: rows.filter(r => r.signal === 'BUY').length,
+          earlyRally: rows.filter(r => r.early_rally_signal).length,
+          avgScore: rows.length ? +(rows.reduce((s, r) => s + r.final_score, 0) / rows.length).toFixed(3) : 0,
+        },
+      });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/rankings/history/trend/:symbol", async (req, res) => {
+    try {
+      const rows = await getRankingsTrend(req.params.symbol, 30);
+      res.json({ symbol: req.params.symbol, trend: rows });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Trigger snapshot save (called internally after dashboard build on trading days)
+  app.post("/api/rankings/history/save", express.json(), async (req, res) => {
+    try {
+      const { date, rankings } = req.body;
+      if (!date || !rankings?.length) return res.status(400).json({ error: 'date and rankings required' });
+      await saveRankingsSnapshot(date, rankings);
+      res.json({ success: true, saved: rankings.length });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
   // END NEXT-DAY PREDICTION ENGINE

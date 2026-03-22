@@ -4,7 +4,7 @@ import {
   Activity, AlertTriangle, BarChart2, Brain, ChevronUp, ChevronDown,
   Globe, Newspaper, RefreshCw, Shield, TrendingUp, TrendingDown,
   Zap, ArrowUpRight, ArrowDownRight, Clock, Cpu, Target, Flame,
-  BarChart, Eye, Filter, MoonStar, SunMedium
+  BarChart, Eye, Filter, MoonStar, SunMedium, History, ArrowUp, ArrowDown, Minus
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -2028,9 +2028,491 @@ function NextDayPredictions() {
   );
 }
 
+// ─── Rankings History Panel ───────────────────────────────────────────────────
+
+interface RankHistoryRow {
+  snapshot_date: string; symbol: string; sector: string; rank: number;
+  signal: string; confidence: string; final_score: number;
+  rally_score: number; inst_score: number; ai_score: number; quant_score: number;
+  early_rally_signal: boolean; market_regime: string;
+}
+
+interface RankHistorySnapshot {
+  date: string;
+  rankings: RankHistoryRow[];
+  sectors: { sector: string; count: number; strongBuy: number; buy: number; avgScore: number }[];
+  summary: { total: number; strongBuy: number; buy: number; earlyRally: number; avgScore: number };
+}
+
+interface RankTrend {
+  symbol: string;
+  trend: RankHistoryRow[];
+}
+
+function RankingsHistoryPanel() {
+  const [dates, setDates] = useState<string[]>([]);
+  const [selectedDate, setSelectedDate] = useState('');
+  const [snapshot, setSnapshot] = useState<RankHistorySnapshot | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [datesLoading, setDatesLoading] = useState(true);
+  const [searchSymbol, setSearchSymbol] = useState('');
+  const [trend, setTrend] = useState<RankTrend | null>(null);
+  const [trendLoading, setTrendLoading] = useState(false);
+  const [view, setView] = useState<'snapshot' | 'trend' | 'sectors'>('snapshot');
+  const [signalFilter, setSignalFilter] = useState('ALL');
+  const [compareDate, setCompareDate] = useState('');
+  const [compareSnapshot, setCompareSnapshot] = useState<RankHistorySnapshot | null>(null);
+
+  // Load available dates
+  useEffect(() => {
+    setDatesLoading(true);
+    fetch('/api/rankings/history/dates')
+      .then(r => r.json())
+      .then(d => {
+        const ds: string[] = d.dates || [];
+        setDates(ds);
+        if (ds.length > 0) { setSelectedDate(ds[0]); }
+      })
+      .catch(() => {})
+      .finally(() => setDatesLoading(false));
+  }, []);
+
+  // Load snapshot when date changes
+  useEffect(() => {
+    if (!selectedDate) return;
+    setLoading(true);
+    setSnapshot(null);
+    fetch(`/api/rankings/history/${selectedDate}`)
+      .then(r => r.json())
+      .then(setSnapshot)
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [selectedDate]);
+
+  // Load compare snapshot
+  useEffect(() => {
+    if (!compareDate) { setCompareSnapshot(null); return; }
+    fetch(`/api/rankings/history/${compareDate}`)
+      .then(r => r.json())
+      .then(setCompareSnapshot)
+      .catch(() => {});
+  }, [compareDate]);
+
+  const loadTrend = (sym: string) => {
+    if (!sym) return;
+    setTrendLoading(true);
+    setTrend(null);
+    fetch(`/api/rankings/history/trend/${sym.toUpperCase()}`)
+      .then(r => r.json())
+      .then(setTrend)
+      .catch(() => {})
+      .finally(() => setTrendLoading(false));
+  };
+
+  // Build rank-change map: symbol → rank in compareSnapshot
+  const compareMap = new Map<string, RankHistoryRow>();
+  compareSnapshot?.rankings.forEach(r => compareMap.set(r.symbol, r));
+
+  const filtered = (snapshot?.rankings || [])
+    .filter(r => signalFilter === 'ALL' || r.signal === signalFilter)
+    .filter(r => !searchSymbol || r.symbol.includes(searchSymbol.toUpperCase()) || r.sector.toLowerCase().includes(searchSymbol.toLowerCase()));
+
+  const fmtDate = (d: string) => new Date(d).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+
+  if (datesLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 py-16 text-white/30">
+        <History size={28} className="opacity-30 animate-pulse" />
+        <p className="text-sm font-bold">Loading history...</p>
+      </div>
+    );
+  }
+
+  if (dates.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 py-16 text-white/30">
+        <History size={32} className="opacity-20" />
+        <p className="text-sm font-bold">No rankings history yet</p>
+        <p className="text-[11px] text-center max-w-xs">Rankings snapshots are saved automatically on each trading day. Check back after the next market session.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+
+      {/* ── Controls bar ── */}
+      <div className="flex flex-wrap items-center gap-2">
+        {/* Date picker */}
+        <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5">
+          <History size={11} className="text-white/30" />
+          <select
+            value={selectedDate}
+            onChange={e => setSelectedDate(e.target.value)}
+            className="bg-transparent text-[11px] text-white outline-none"
+          >
+            {dates.map(d => <option key={d} value={d}>{fmtDate(d)}</option>)}
+          </select>
+        </div>
+
+        {/* Compare date */}
+        <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5">
+          <span className="text-[9px] text-white/30 font-bold uppercase tracking-[0.1em]">vs</span>
+          <select
+            value={compareDate}
+            onChange={e => setCompareDate(e.target.value)}
+            className="bg-transparent text-[11px] text-white/60 outline-none"
+          >
+            <option value="">No compare</option>
+            {dates.filter(d => d !== selectedDate).map(d => <option key={d} value={d}>{fmtDate(d)}</option>)}
+          </select>
+        </div>
+
+        {/* View toggle */}
+        <div className="flex rounded-xl border border-white/10 bg-white/5 p-0.5 gap-0.5">
+          {(['snapshot', 'sectors', 'trend'] as const).map(v => (
+            <button key={v} onClick={() => setView(v)}
+              className={`rounded-lg px-3 py-1 text-[9px] font-black uppercase tracking-[0.1em] transition-all ${view === v ? 'bg-violet-500/20 text-violet-300' : 'text-white/30 hover:text-white/60'}`}>
+              {v === 'snapshot' ? 'Rankings' : v === 'sectors' ? 'Sectors' : 'Stock Trend'}
+            </button>
+          ))}
+        </div>
+
+        <span className="ml-auto text-[9px] text-white/20 font-mono">{dates.length} trading days saved</span>
+      </div>
+
+      {/* ── Summary KPIs ── */}
+      {snapshot && (
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+          {[
+            { label: 'Total', value: snapshot.summary.total, color: 'text-white' },
+            { label: 'Strong Buy', value: snapshot.summary.strongBuy, color: 'text-emerald-400' },
+            { label: 'Buy', value: snapshot.summary.buy, color: 'text-emerald-300' },
+            { label: 'Early Rally', value: snapshot.summary.earlyRally, color: 'text-amber-400' },
+            { label: 'Avg Score', value: Math.round(snapshot.summary.avgScore * 100), color: 'text-violet-400' },
+          ].map(k => (
+            <div key={k.label} className="rounded-2xl border border-white/5 bg-white/[0.03] px-3 py-2.5 text-center">
+              <p className={`text-xl font-black ${k.color}`}>{k.value}</p>
+              <p className="text-[8px] font-bold uppercase tracking-[0.12em] text-white/25 mt-0.5">{k.label}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {loading && (
+        <div className="flex items-center justify-center gap-2 py-12 text-white/30">
+          <RefreshCw size={16} className="animate-spin" />
+          <span className="text-sm font-bold">Loading snapshot...</span>
+        </div>
+      )}
+
+      {/* ── SNAPSHOT VIEW ── */}
+      {!loading && view === 'snapshot' && snapshot && (
+        <div className="space-y-3">
+          {/* Signal filter + search */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5">
+              <Filter size={11} className="text-white/30" />
+              <input
+                value={searchSymbol}
+                onChange={e => setSearchSymbol(e.target.value)}
+                placeholder="Search symbol / sector..."
+                className="bg-transparent text-[11px] text-white placeholder-white/20 outline-none w-36"
+              />
+            </div>
+            {['ALL', 'STRONG BUY', 'BUY', 'HOLD', 'SELL'].map(s => (
+              <button key={s} onClick={() => setSignalFilter(s)}
+                className={`rounded-lg px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.1em] transition-all border ${
+                  signalFilter === s
+                    ? s === 'STRONG BUY' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                      : s === 'BUY' ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20'
+                      : s === 'HOLD' ? 'bg-amber-500/15 text-amber-400 border-amber-500/20'
+                      : s === 'SELL' ? 'bg-rose-500/20 text-rose-300 border-rose-500/30'
+                      : 'bg-violet-500/20 text-violet-300 border-violet-500/30'
+                    : 'text-white/30 border-transparent hover:text-white/60'
+                }`}>
+                {s}
+              </button>
+            ))}
+            <span className="ml-auto text-[9px] text-white/20 font-mono">{filtered.length} stocks</span>
+          </div>
+
+          {compareDate && compareSnapshot && (
+            <div className="rounded-xl border border-violet-500/20 bg-violet-500/[0.05] px-3 py-2 text-[10px] text-violet-300/80 flex items-center gap-2">
+              <ArrowUpRight size={12} className="text-violet-400 shrink-0" />
+              Comparing <span className="font-black">{fmtDate(selectedDate)}</span> vs <span className="font-black">{fmtDate(compareDate)}</span> — rank change arrows show movement
+            </div>
+          )}
+
+          <div className="overflow-x-auto rounded-2xl border border-white/5">
+            <table className="w-full text-[11px]">
+              <thead>
+                <tr className="border-b border-white/5 bg-white/[0.03]">
+                  <th className="px-3 py-2.5 text-left font-black uppercase tracking-[0.12em] text-white/30">#</th>
+                  <th className="px-3 py-2.5 text-left font-black uppercase tracking-[0.12em] text-white/30">Symbol</th>
+                  <th className="px-3 py-2.5 text-left font-black uppercase tracking-[0.12em] text-white/30">Score</th>
+                  <th className="px-3 py-2.5 text-left font-black uppercase tracking-[0.12em] text-amber-400/60">Rally</th>
+                  <th className="px-3 py-2.5 text-left font-black uppercase tracking-[0.12em] text-violet-400/60">Inst.</th>
+                  <th className="px-3 py-2.5 text-left font-black uppercase tracking-[0.12em] text-cyan-400/60">AI</th>
+                  <th className="px-3 py-2.5 text-left font-black uppercase tracking-[0.12em] text-white/30">Regime</th>
+                  <th className="px-3 py-2.5 text-left font-black uppercase tracking-[0.12em] text-white/30">Signal</th>
+                  {compareDate && <th className="px-3 py-2.5 text-left font-black uppercase tracking-[0.12em] text-violet-400/60">Rank Δ</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(row => {
+                  const prev = compareMap.get(row.symbol);
+                  const rankDelta = prev ? prev.rank - row.rank : null; // positive = moved up
+                  const signalChanged = prev && prev.signal !== row.signal;
+                  return (
+                    <tr key={row.symbol}
+                      className={`border-b border-white/5 transition-colors hover:bg-white/[0.03] ${row.early_rally_signal ? 'bg-amber-500/[0.03]' : ''}`}>
+                      <td className="px-3 py-2.5 text-white/30 font-mono text-[10px]">{row.rank}</td>
+                      <td className="px-3 py-2.5">
+                        <div className="flex items-center gap-1.5">
+                          {row.early_rally_signal && <Zap size={9} className="text-amber-400 shrink-0" />}
+                          <button
+                            onClick={() => { setSearchSymbol(row.symbol); setView('trend'); loadTrend(row.symbol); }}
+                            className="font-black text-white hover:text-violet-300 transition-colors"
+                          >{row.symbol}</button>
+                          <span className="text-white/25 text-[9px] hidden sm:inline">{row.sector}</span>
+                          {signalChanged && (
+                            <span className="text-[7px] font-black text-violet-400 bg-violet-500/10 rounded px-1">
+                              was {prev!.signal}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <div className="flex items-center gap-2">
+                          <div className="relative flex items-center justify-center w-8 h-8 shrink-0">
+                            <ScoreRing value={row.final_score} size={30} stroke={3} color="#10b981" />
+                            <span className="absolute text-[8px] font-black text-emerald-400">{Math.round(row.final_score * 100)}</span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2.5 min-w-[60px]">
+                        <div className="space-y-0.5">
+                          <span className="font-bold text-amber-400 text-[10px]">{Math.round(row.rally_score * 100)}</span>
+                          <ScoreBar value={row.rally_score} color="amber" thin />
+                        </div>
+                      </td>
+                      <td className="px-3 py-2.5 min-w-[60px]">
+                        <div className="space-y-0.5">
+                          <span className="font-bold text-violet-400 text-[10px]">{Math.round(row.inst_score * 100)}</span>
+                          <ScoreBar value={row.inst_score} color="violet" thin />
+                        </div>
+                      </td>
+                      <td className="px-3 py-2.5 min-w-[60px]">
+                        <div className="space-y-0.5">
+                          <span className="font-bold text-cyan-400 text-[10px]">{Math.round(row.ai_score * 100)}</span>
+                          <ScoreBar value={row.ai_score} color="cyan" thin />
+                        </div>
+                      </td>
+                      <td className="px-3 py-2.5 text-[10px] text-white/40">{row.market_regime}</td>
+                      <td className="px-3 py-2.5"><SignalBadge signal={row.signal} /></td>
+                      {compareDate && (
+                        <td className="px-3 py-2.5">
+                          {rankDelta === null ? (
+                            <span className="text-[9px] text-white/20">new</span>
+                          ) : rankDelta > 0 ? (
+                            <span className="flex items-center gap-0.5 text-emerald-400 font-black text-[10px]">
+                              <ArrowUp size={10} />+{rankDelta}
+                            </span>
+                          ) : rankDelta < 0 ? (
+                            <span className="flex items-center gap-0.5 text-rose-400 font-black text-[10px]">
+                              <ArrowDown size={10} />{rankDelta}
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-0.5 text-white/30 text-[10px]">
+                              <Minus size={10} />0
+                            </span>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── SECTORS VIEW ── */}
+      {!loading && view === 'sectors' && snapshot && (
+        <div className="space-y-3">
+          <p className="text-[10px] text-white/30 font-bold uppercase tracking-[0.12em]">Sector breakdown for {fmtDate(selectedDate)}</p>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {snapshot.sectors.map(s => (
+              <div key={s.sector} className="rounded-2xl border border-white/5 bg-white/[0.03] p-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-black text-white text-[12px]">{s.sector}</span>
+                  <span className="text-[9px] text-white/30 font-mono">{s.count} stocks</span>
+                </div>
+                <div className="flex items-center gap-3 text-[10px]">
+                  <span className="text-emerald-400 font-black">{s.strongBuy} STRONG BUY</span>
+                  <span className="text-emerald-300 font-bold">{s.buy} BUY</span>
+                  <span className="ml-auto text-violet-400 font-black">Avg {Math.round(s.avgScore * 100)}</span>
+                </div>
+                <div className="h-1.5 rounded-full bg-white/5 overflow-hidden">
+                  <div className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-violet-500 transition-all duration-700"
+                    style={{ width: `${Math.round(s.avgScore * 100)}%` }} />
+                </div>
+                {/* Strong buy bar */}
+                <div className="flex items-center gap-2 text-[9px]">
+                  <span className="text-white/30 w-20">Strong Buy %</span>
+                  <div className="flex-1 h-1 rounded-full bg-white/5 overflow-hidden">
+                    <div className="h-full rounded-full bg-emerald-500"
+                      style={{ width: `${s.count > 0 ? Math.round((s.strongBuy / s.count) * 100) : 0}%` }} />
+                  </div>
+                  <span className="text-emerald-400 font-bold w-8 text-right">
+                    {s.count > 0 ? Math.round((s.strongBuy / s.count) * 100) : 0}%
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── TREND VIEW ── */}
+      {view === 'trend' && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5">
+              <Filter size={11} className="text-white/30" />
+              <input
+                value={searchSymbol}
+                onChange={e => setSearchSymbol(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && loadTrend(searchSymbol)}
+                placeholder="Enter symbol (e.g. RELIANCE)..."
+                className="bg-transparent text-[11px] text-white placeholder-white/20 outline-none w-44"
+              />
+            </div>
+            <button onClick={() => loadTrend(searchSymbol)}
+              className="rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.1em] text-white/50 hover:text-white transition">
+              Track
+            </button>
+          </div>
+
+          {trendLoading && (
+            <div className="flex items-center justify-center gap-2 py-10 text-white/30">
+              <RefreshCw size={14} className="animate-spin" />
+              <span className="text-sm font-bold">Loading trend...</span>
+            </div>
+          )}
+
+          {!trendLoading && trend && trend.trend.length === 0 && (
+            <div className="flex flex-col items-center gap-2 py-12 text-white/20">
+              <Eye size={24} className="opacity-30" />
+              <p className="text-sm font-bold">{trend.symbol} not found in rankings history</p>
+              <p className="text-[10px]">This stock may not have appeared in the top 50 on any saved trading day.</p>
+            </div>
+          )}
+
+          {!trendLoading && trend && trend.trend.length > 0 && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-3">
+                <span className="text-lg font-black text-white">{trend.symbol}</span>
+                <span className="text-[10px] text-white/30">{trend.trend[0]?.sector}</span>
+                <span className="text-[9px] text-white/20 font-mono ml-auto">{trend.trend.length} trading days</span>
+              </div>
+
+              {/* Rank chart — visual bar chart */}
+              <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-4 space-y-2">
+                <p className="text-[9px] font-black uppercase tracking-[0.12em] text-white/30">Rank over time (lower = better)</p>
+                <div className="flex items-end gap-1 h-20">
+                  {trend.trend.map((t, i) => {
+                    const maxRank = 50;
+                    const barH = Math.round(((maxRank - t.rank + 1) / maxRank) * 100);
+                    const isLatest = i === trend.trend.length - 1;
+                    return (
+                      <div key={t.snapshot_date} className="flex-1 flex flex-col items-center gap-0.5 group relative">
+                        <div className="absolute -top-6 left-1/2 -translate-x-1/2 hidden group-hover:flex flex-col items-center z-10">
+                          <span className="bg-black/80 border border-white/10 rounded px-1.5 py-0.5 text-[8px] text-white font-bold whitespace-nowrap">
+                            #{t.rank} · {new Date(t.snapshot_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                          </span>
+                        </div>
+                        <div
+                          className={`w-full rounded-t transition-all ${isLatest ? 'bg-violet-500' : t.signal === 'STRONG BUY' ? 'bg-emerald-500/70' : t.signal === 'BUY' ? 'bg-emerald-500/40' : 'bg-white/20'}`}
+                          style={{ height: `${barH}%` }}
+                        />
+                        <span className="text-[7px] text-white/20 rotate-45 origin-left hidden sm:block">
+                          {new Date(t.snapshot_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="flex justify-between text-[8px] text-white/20">
+                  <span>Rank 50</span><span>Rank 1 (best)</span>
+                </div>
+              </div>
+
+              {/* Score trend table */}
+              <div className="overflow-x-auto rounded-2xl border border-white/5">
+                <table className="w-full text-[10px]">
+                  <thead>
+                    <tr className="border-b border-white/5 bg-white/[0.03]">
+                      <th className="px-3 py-2 text-left font-black uppercase tracking-[0.1em] text-white/30">Date</th>
+                      <th className="px-3 py-2 text-left font-black uppercase tracking-[0.1em] text-white/30">Rank</th>
+                      <th className="px-3 py-2 text-left font-black uppercase tracking-[0.1em] text-emerald-400/60">Score</th>
+                      <th className="px-3 py-2 text-left font-black uppercase tracking-[0.1em] text-amber-400/60">Rally</th>
+                      <th className="px-3 py-2 text-left font-black uppercase tracking-[0.1em] text-violet-400/60">Inst.</th>
+                      <th className="px-3 py-2 text-left font-black uppercase tracking-[0.1em] text-white/30">Regime</th>
+                      <th className="px-3 py-2 text-left font-black uppercase tracking-[0.1em] text-white/30">Signal</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...trend.trend].reverse().map((t, i, arr) => {
+                      const prev = arr[i + 1];
+                      const rankDelta = prev ? prev.rank - t.rank : null;
+                      return (
+                        <tr key={t.snapshot_date} className="border-b border-white/5 hover:bg-white/[0.02]">
+                          <td className="px-3 py-2 text-white/50 font-mono">
+                            {new Date(t.snapshot_date).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="flex items-center gap-1">
+                              <span className="font-black text-white">#{t.rank}</span>
+                              {rankDelta !== null && (
+                                rankDelta > 0 ? <span className="text-emerald-400 text-[9px] font-bold">↑{rankDelta}</span>
+                                : rankDelta < 0 ? <span className="text-rose-400 text-[9px] font-bold">↓{Math.abs(rankDelta)}</span>
+                                : <span className="text-white/20 text-[9px]">—</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 font-bold text-emerald-400">{Math.round(t.final_score * 100)}</td>
+                          <td className="px-3 py-2 font-bold text-amber-400">{Math.round(t.rally_score * 100)}</td>
+                          <td className="px-3 py-2 font-bold text-violet-400">{Math.round(t.inst_score * 100)}</td>
+                          <td className="px-3 py-2 text-white/40">{t.market_regime}</td>
+                          <td className="px-3 py-2"><SignalBadge signal={t.signal} /></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {!trendLoading && !trend && (
+            <div className="flex flex-col items-center gap-2 py-12 text-white/20">
+              <Eye size={24} className="opacity-30" />
+              <p className="text-sm font-bold">Enter a stock symbol to track its ranking history</p>
+              <p className="text-[10px]">Click any symbol in the Rankings view to auto-load its trend</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Tab ─────────────────────────────────────────────────────────────────
 
-type PanelId = 'rankings' | 'rally' | 'alerts' | 'news' | 'macro' | 'sectors' | 'predictions';
+type PanelId = 'rankings' | 'rally' | 'alerts' | 'news' | 'macro' | 'sectors' | 'predictions' | 'rankings-history';
 
 export default function AIStockIntelligenceTab() {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
@@ -2071,6 +2553,7 @@ export default function AIStockIntelligenceTab() {
     { id: 'macro',    label: 'Macro',       icon: Globe },
     { id: 'sectors',  label: 'Sectors',     icon: Activity },
     { id: 'predictions', label: 'Next-Day', icon: Target },
+    { id: 'rankings-history', label: 'Rank History', icon: History },
   ];
 
   if (loading) {
@@ -2245,6 +2728,7 @@ export default function AIStockIntelligenceTab() {
         {activePanel === 'macro'    && <MacroPanel macro={dashboard.macroSnapshot} aiInsights={dashboard.aiInsights} />}
         {activePanel === 'sectors'  && <SectorStrengthPanel sectors={dashboard.sectorStrength} />}
         {activePanel === 'predictions' && <NextDayPredictions />}
+        {activePanel === 'rankings-history' && <RankingsHistoryPanel />}
       </div>
     </div>
   );

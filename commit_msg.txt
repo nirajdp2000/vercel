@@ -1,1 +1,1 @@
-fix: show last trading day predictions on weekends/holidays instead of synthetic data
+feat: rankings history tab with snapshot, sector breakdown, stock trend tracking + update index.html
