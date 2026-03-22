@@ -1,1 +1,1 @@
-ui: factor breakdown and sector strength beside narrow rankings table
+fix: right panel fills table height, no blank space below sector strength

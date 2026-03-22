@@ -81,7 +81,7 @@ export function HedgeFundSignalRanking({ dashboard }: { dashboard?: HedgeFundSig
       </div>
 
       {/* ── Table + right panel side by side ── */}
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1fr_300px]">
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1fr_300px] xl:items-stretch">
 
         {/* Narrow rankings table */}
         <div className="rounded-[1.5rem] border border-white/5 bg-zinc-950/75 overflow-hidden min-w-0">
@@ -128,8 +128,8 @@ export function HedgeFundSignalRanking({ dashboard }: { dashboard?: HedgeFundSig
           </div>
         </div>
 
-        {/* Right panel: Factor Breakdown + Sector Strength stacked */}
-        <div className="space-y-4 min-w-0">
+        {/* Right panel: Factor Breakdown + Sector Strength stacked, fills table height */}
+        <div className="flex flex-col gap-4 min-w-0 min-h-0 max-h-[580px]">
 
           {/* Factor Breakdown */}
           <div className="rounded-[1.5rem] border border-white/5 bg-zinc-950/75 p-4">
@@ -183,12 +183,12 @@ export function HedgeFundSignalRanking({ dashboard }: { dashboard?: HedgeFundSig
             </div>
           </div>
 
-          {/* Sector Strength */}
-          <div className="rounded-[1.5rem] border border-white/5 bg-zinc-950/75 p-4">
+          {/* Sector Strength — grows to fill remaining height */}
+          <div className="flex-1 rounded-[1.5rem] border border-white/5 bg-zinc-950/75 p-4 flex flex-col min-h-0">
             <h4 className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-white mb-3">
               <Building2 className="h-3 w-3 text-amber-300" /> Sector Strength
             </h4>
-            <div className="space-y-2">
+            <div className="flex-1 overflow-y-auto space-y-2 min-h-0">
               {sectorStrength.slice(0, 7).map((s, i) => (
                 <div key={s.sector} className="rounded-xl border border-white/5 bg-black/20 px-3 py-2.5">
                   <div className="flex items-center justify-between mb-1">
