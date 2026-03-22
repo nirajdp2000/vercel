@@ -3495,8 +3495,10 @@ Respond ONLY with this JSON structure (fill every field):
     const clampN = (v: number, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v));
 
     // ── per-stock analysis ────────────────────────────────────────────────
+    // Date seed ensures signals vary daily (not static forever)
+    const todayDateSeed = parseInt(new Date().toISOString().slice(0, 10).replace(/-/g, ''), 10);
     const results = universe.map((profile) => {
-      const rng = seededGenerator(symbolSeed(profile.symbol) ^ 0xdeadbeef);
+      const rng = seededGenerator((symbolSeed(profile.symbol) ^ 0xdeadbeef) ^ (todayDateSeed >>> 0));
       const totalDays = 260;
       const sectorDrift: Record<string, number> = {
         Technology: 0.00165, Financials: 0.0012, Energy: 0.0011,
@@ -3651,14 +3653,14 @@ Respond ONLY with this JSON structure (fill every field):
         : "SELL";
       const confidence = finalScore > 0.72 ? "HIGH" : finalScore > 0.48 ? "MEDIUM" : "LOW";
 
-      // Module 9 — Alerts
+      // Module 9 — Alerts (thresholds tuned for synthetic + live data)
       const ts = new Date().toISOString();
       const alerts: any[] = [];
       if (earlyRallySignal) alerts.push({ stockSymbol: profile.symbol, alertType: "RALLY", severity: "HIGH", reason: `Price acceleration ${priceAccel.toFixed(2)}% with volume spike ${volSpike.toFixed(1)}x — early rally detected`, confidenceScore: +(rallyScore.toFixed(2)), timestamp: ts });
       if (institutionalSignal) alerts.push({ stockSymbol: profile.symbol, alertType: "INSTITUTIONAL", severity: "HIGH", reason: `Order imbalance ${orderImbalance.toFixed(2)}x — smart money accumulation`, confidenceScore: +(instScore.toFixed(2)), timestamp: ts });
-      if (newsImpact > 0.70) alerts.push({ stockSymbol: profile.symbol, alertType: "NEWS", severity: "MEDIUM", reason: "High-impact news event — significant price catalyst", confidenceScore: +(newsImpact.toFixed(2)), timestamp: ts });
-      if (volSpike > 4.0) alerts.push({ stockSymbol: profile.symbol, alertType: "VOLUME", severity: "HIGH", reason: `Volume surge ${volSpike.toFixed(1)}x above average`, confidenceScore: +Math.min(0.95, volSpike / 6).toFixed(2), timestamp: ts });
-      if (aiScore > 0.80) alerts.push({ stockSymbol: profile.symbol, alertType: "AI_PREDICTION", severity: "HIGH", reason: "AI ensemble confidence > 80% — strong directional signal", confidenceScore: +(aiScore.toFixed(2)), timestamp: ts });
+      if (newsImpact > 0.55) alerts.push({ stockSymbol: profile.symbol, alertType: "NEWS", severity: newsImpact > 0.70 ? "HIGH" : "MEDIUM", reason: "High-impact news event — significant price catalyst", confidenceScore: +(newsImpact.toFixed(2)), timestamp: ts });
+      if (volSpike > 1.8) alerts.push({ stockSymbol: profile.symbol, alertType: "VOLUME", severity: volSpike > 3.0 ? "HIGH" : "MEDIUM", reason: `Volume surge ${volSpike.toFixed(1)}x above average`, confidenceScore: +Math.min(0.95, volSpike / 4).toFixed(2), timestamp: ts });
+      if (aiScore > 0.65) alerts.push({ stockSymbol: profile.symbol, alertType: "AI_PREDICTION", severity: aiScore > 0.80 ? "HIGH" : "MEDIUM", reason: `AI ensemble confidence ${(aiScore * 100).toFixed(0)}% — strong directional signal`, confidenceScore: +(aiScore.toFixed(2)), timestamp: ts });
 
       return {
         symbol: profile.symbol, sector: profile.sector, industry: profile.industry,
@@ -3722,19 +3724,28 @@ Respond ONLY with this JSON structure (fill every field):
     const top50 = rankedWithSignals.slice(0, 50);
     const allRanked = rankedWithSignals;
 
-    // earlyRallyCandidates: prefer real ORB signals, fall back to top rallyScore stocks
+    // earlyRallyCandidates: prefer real ORB signals, always fall back to top rallyScore
     const orbCandidates = rankedWithSignals.filter(r => r.earlyRallySignal);
-    const earlyRallyCandidates = (
-      orbCandidates.length >= 3
-        ? orbCandidates
-        : rankedWithSignals.slice().sort((a, b) => b.rallyProbabilityScore - a.rallyProbabilityScore)
-    )
-      .sort((a, b) => b.rallyProbabilityScore - a.rallyProbabilityScore)
+    const earlyRallyCandidates = rankedWithSignals
+      .slice()
+      .sort((a, b) => {
+        // Real ORB signals first, then by rallyProbabilityScore
+        if (a.earlyRallySignal && !b.earlyRallySignal) return -1;
+        if (!a.earlyRallySignal && b.earlyRallySignal) return 1;
+        return b.rallyProbabilityScore - a.rallyProbabilityScore;
+      })
       .slice(0, 15);
-    const liveAlerts = rankedWithSignals.slice(0, 30)
+
+    // liveAlerts: collect from ALL ranked stocks (not just top 30)
+    const liveAlerts = rankedWithSignals
       .flatMap(r => r.alerts)
-      .sort((a: any, b: any) => b.confidenceScore - a.confidenceScore)
-      .slice(0, 20);
+      .sort((a: any, b: any) => {
+        // HIGH severity first, then by confidenceScore
+        if (a.severity === 'HIGH' && b.severity !== 'HIGH') return -1;
+        if (a.severity !== 'HIGH' && b.severity === 'HIGH') return 1;
+        return b.confidenceScore - a.confidenceScore;
+      })
+      .slice(0, 50);
 
     // Sector strength
     const sectorMap = new Map<string, number[]>();
@@ -3836,7 +3847,24 @@ Respond ONLY with this JSON structure (fill every field):
         dataSource: 'synthetic',
         // Keep signal/confidence intact — percentile ranking is still meaningful
       }));
-      payload.earlyRallyCandidates = [];
+      // On weekends show top watchlist candidates (by finalScore) so panel isn't empty
+      payload.earlyRallyCandidates = rankedWithSignals
+        .slice()
+        .sort((a, b) => b.finalScore - a.finalScore)
+        .slice(0, 15)
+        .map((r: any) => ({
+          ...r,
+          priceChange: 0,
+          priceChangePercent: 0,
+          priceAcceleration: 0,
+          earlyRallySignal: false,
+          rallyProbabilityScore: r.finalScore, // use finalScore as proxy
+          volumeSpike: 1,
+          alerts: [],
+          dataSource: 'synthetic',
+          orbSignal: 'NONE',
+          marketClosedWatchlist: true,
+        }));
       payload.liveAlerts = [];
       payload.summary = {
         ...payload.summary,

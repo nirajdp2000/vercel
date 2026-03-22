@@ -528,23 +528,26 @@ function EarlyRallyPanel({ candidates, marketDay }: { candidates: StockIntellige
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-16 text-white/30">
         <Zap size={32} className="opacity-20" />
-        {marketDay === false
-          ? <p className="text-sm font-bold">Early rally signals paused — market is closed</p>
-          : <p className="text-sm font-bold">No early rally signals detected right now</p>
-        }
-        <p className="text-[11px]">
-          {marketDay === false
-            ? 'Signals will resume when NSE/BSE opens on the next trading day'
-            : 'The engine scans ORB + VWAP + Volume every 60s during market hours'
-          }
-        </p>
+        <p className="text-sm font-bold">No early rally signals detected right now</p>
+        <p className="text-[11px]">The engine scans ORB + VWAP + Volume every 60s during market hours</p>
       </div>
     );
   }
+
+  const isWatchlistMode = marketDay === false;
+
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+    <div className="space-y-3">
+      {isWatchlistMode && (
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.06] px-3 py-2 flex items-center gap-2">
+          <MoonStar size={12} className="text-amber-400 shrink-0" />
+          <p className="text-[10px] text-amber-300/80">Market closed — showing top watchlist candidates by AI score. Live rally signals resume on next trading day.</p>
+        </div>
+      )}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
       {candidates.map(c => {
         const isLive = c.dataSource === 'live';
+        const isWatchlist = (c as any).marketClosedWatchlist;
         return (
           <div key={c.symbol} className={`group rounded-2xl border p-4 space-y-3 transition-all hover:border-amber-500/40 ${
             isLive ? 'border-amber-500/30 bg-gradient-to-br from-amber-500/8 to-transparent'
@@ -560,6 +563,11 @@ function EarlyRallyPanel({ candidates, marketDay }: { candidates: StockIntellige
                   {isLive && (
                     <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 border border-emerald-500/25 px-1.5 py-0.5 text-[7px] font-black text-emerald-400 uppercase tracking-[0.1em]">
                       ● LIVE
+                    </span>
+                  )}
+                  {isWatchlist && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/25 px-1.5 py-0.5 text-[7px] font-black text-amber-400 uppercase tracking-[0.1em]">
+                      WATCHLIST
                     </span>
                   )}
                 </div>
@@ -659,13 +667,14 @@ function EarlyRallyPanel({ candidates, marketDay }: { candidates: StockIntellige
           </div>
         );
       })}
+      </div>
     </div>
   );
 }
 
 // ─── Alerts Feed ──────────────────────────────────────────────────────────────
 
-function AlertsFeed({ alerts }: { alerts: StockAlert[] }) {
+function AlertsFeed({ alerts, marketDay }: { alerts: StockAlert[]; marketDay?: boolean }) {
   const [filter, setFilter] = useState<'ALL' | 'HIGH' | 'MEDIUM'>('ALL');
   const shown = alerts.filter(a => filter === 'ALL' || a.severity === filter);
 
@@ -690,11 +699,18 @@ function AlertsFeed({ alerts }: { alerts: StockAlert[] }) {
         <span className="ml-auto text-[9px] text-white/20 font-mono">{shown.length} alerts</span>
       </div>
 
+      {marketDay === false && (
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.06] px-3 py-2 flex items-center gap-2">
+          <MoonStar size={12} className="text-amber-400 shrink-0" />
+          <p className="text-[10px] text-amber-300/80">Market closed — live alerts resume on the next trading day.</p>
+        </div>
+      )}
+
       <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/10">
         {shown.length === 0 && (
           <div className="flex flex-col items-center justify-center gap-2 py-12 text-white/20">
             <AlertTriangle size={28} className="opacity-30" />
-            <p className="text-sm font-bold">No alerts</p>
+            <p className="text-sm font-bold">{marketDay === false ? 'No live alerts — market is closed' : 'No alerts'}</p>
           </div>
         )}
         {shown.map((a, i) => (
@@ -2220,7 +2236,7 @@ export default function AIStockIntelligenceTab() {
       <div className="rounded-2xl border border-white/5 bg-black/20 p-4 min-h-[400px]">
         {activePanel === 'rankings' && <RankingsTable data={dashboard.rankings} />}
         {activePanel === 'rally'    && <EarlyRallyPanel candidates={dashboard.earlyRallyCandidates} marketDay={(dashboard as any).marketDay} />}
-        {activePanel === 'alerts'   && <AlertsFeed alerts={dashboard.liveAlerts} />}
+        {activePanel === 'alerts'   && <AlertsFeed alerts={dashboard.liveAlerts} marketDay={(dashboard as any).marketDay} />}
         {activePanel === 'news'     && <NewsFeedPanel news={dashboard.newsFeed} />}
         {activePanel === 'macro'    && <MacroPanel macro={dashboard.macroSnapshot} aiInsights={dashboard.aiInsights} />}
         {activePanel === 'sectors'  && <SectorStrengthPanel sectors={dashboard.sectorStrength} />}
