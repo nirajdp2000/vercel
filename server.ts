@@ -4116,9 +4116,9 @@ Respond ONLY with this JSON structure (fill every field):
         .slice(0, 15)
         .map((r: any) => ({
           ...r,
-          priceChange: 0,
-          priceChangePercent: 0,
-          priceAcceleration: 0,
+          // Keep priceAcceleration and priceChangePercent — they are synthetic scores
+          // that reflect the model's momentum assessment, not intraday live prices.
+          // Only zero volumeSpike (intraday-only signal).
           volumeSpike: 1,
           dataSource: 'synthetic',
           orbSignal: 'NONE',
