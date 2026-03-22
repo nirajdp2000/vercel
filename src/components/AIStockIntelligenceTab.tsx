@@ -46,6 +46,9 @@ interface StockIntelligenceResult {
   alerts: StockAlert[];
   signal: string;
   confidence: string;
+  timeHorizon?: string;
+  macroRegime?: string;
+  geoRiskLevel?: string;
   // ORB/VWAP fields (present when live Upstox data available)
   orbHigh?: number;
   orbLow?: number;
@@ -102,6 +105,20 @@ interface Dashboard {
   liveAlerts: StockAlert[];
   newsFeed: NewsItem[];
   macroSnapshot: MacroSnapshot;
+  macroRegimeContext?: {
+    regime: string;
+    summary: string;
+    marketBiasScore: number;
+    geoRisk: number;
+    geoRiskLevel: string;
+    vix: number;
+    shortTermBias: number;
+    longTermBias: number;
+    fiiBullish: boolean;
+    niftyBullish: boolean;
+    crudeHigh: boolean;
+    rupeWeak: boolean;
+  } | null;
   sectorStrength: SectorStrength[];
   summary: Record<string, string | number>;
   computedAt: string;
@@ -275,6 +292,43 @@ function KPIBar({ summary, computedAt, aiPowered }: {
         <span className="text-[9px] text-white/20 font-mono ml-auto">
           Updated {new Date(computedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
         </span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Macro Regime Banner ──────────────────────────────────────────────────────
+
+function MacroRegimeBanner({ ctx }: { ctx: Dashboard['macroRegimeContext'] }) {
+  if (!ctx) return null;
+  const regimeColor =
+    ctx.regime === 'FEAR'     ? 'border-rose-500/30 bg-rose-500/5 text-rose-300' :
+    ctx.regime === 'RISK_OFF' ? 'border-amber-500/30 bg-amber-500/5 text-amber-300' :
+    ctx.regime === 'CAUTIOUS' ? 'border-yellow-500/30 bg-yellow-500/5 text-yellow-300' :
+                                'border-emerald-500/30 bg-emerald-500/5 text-emerald-300';
+  const geoColor = ctx.geoRiskLevel === 'HIGH' ? 'text-rose-400' : ctx.geoRiskLevel === 'MEDIUM' ? 'text-amber-400' : 'text-emerald-400';
+  const biasW = Math.round(ctx.marketBiasScore * 100);
+
+  return (
+    <div className={`rounded-2xl border px-4 py-3 ${regimeColor}`}>
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2">
+          <Globe size={13} className="shrink-0 opacity-70" />
+          <span className="text-[9px] font-black uppercase tracking-[0.18em] opacity-60">Market Regime</span>
+          <span className="text-[11px] font-black">{ctx.summary}</span>
+        </div>
+        <div className="flex items-center gap-2 ml-auto flex-wrap">
+          <span className="text-[9px] font-bold text-white/40">VIX <span className="text-white/70">{ctx.vix.toFixed(1)}</span></span>
+          <span className="text-[9px] font-bold text-white/40">Geo-Risk <span className={`font-black ${geoColor}`}>{ctx.geoRiskLevel}</span></span>
+          <span className="text-[9px] font-bold text-white/40">Bias <span className="text-white/70">{biasW}%</span></span>
+          <span className="text-[9px] font-bold text-white/40">
+            ST <span className="text-cyan-400">{Math.round(ctx.shortTermBias * 100)}%</span>
+            {' / '}LT <span className="text-violet-400">{Math.round(ctx.longTermBias * 100)}%</span>
+          </span>
+          {ctx.fiiBullish && <span className="text-[8px] font-black text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-2 py-0.5">FII INFLOW</span>}
+          {ctx.crudeHigh  && <span className="text-[8px] font-black text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-full px-2 py-0.5">CRUDE HIGH</span>}
+          {ctx.rupeWeak   && <span className="text-[8px] font-black text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-full px-2 py-0.5">RUPEE WEAK</span>}
+        </div>
       </div>
     </div>
   );
@@ -497,6 +551,26 @@ function RankingsTable({ data }: { data: StockIntelligenceResult[] }) {
                           <p className="text-white/30 uppercase tracking-[0.15em] mb-1">Confidence</p>
                           <p className="font-black text-white">{row.confidence}</p>
                         </div>
+                        {row.timeHorizon && (
+                          <div className="col-span-2">
+                            <p className="text-white/30 uppercase tracking-[0.15em] mb-1">Time Horizon</p>
+                            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-black border ${
+                              row.timeHorizon.startsWith('Short') ? 'bg-amber-500/10 border-amber-500/20 text-amber-300'
+                              : row.timeHorizon.startsWith('Long') ? 'bg-violet-500/10 border-violet-500/20 text-violet-300'
+                              : 'bg-cyan-500/10 border-cyan-500/20 text-cyan-300'
+                            }`}>
+                              <Clock size={9} />{row.timeHorizon}
+                            </span>
+                          </div>
+                        )}
+                        {row.geoRiskLevel && (
+                          <div>
+                            <p className="text-white/30 uppercase tracking-[0.15em] mb-1">Geo-Risk</p>
+                            <span className={`font-black text-[10px] ${
+                              row.geoRiskLevel === 'HIGH' ? 'text-rose-400' : row.geoRiskLevel === 'MEDIUM' ? 'text-amber-400' : 'text-emerald-400'
+                            }`}>{row.geoRiskLevel}</span>
+                          </div>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -2722,7 +2796,12 @@ export default function AIStockIntelligenceTab() {
 
       {/* ── Panel Content ── */}
       <div className="rounded-2xl border border-white/5 bg-black/20 p-4 min-h-[400px]">
-        {activePanel === 'rankings' && <RankingsTable data={dashboard.rankings} />}
+        {activePanel === 'rankings' && (
+          <div className="space-y-3">
+            <MacroRegimeBanner ctx={dashboard.macroRegimeContext ?? null} />
+            <RankingsTable data={dashboard.rankings} />
+          </div>
+        )}
         {activePanel === 'rally'    && <EarlyRallyPanel candidates={dashboard.earlyRallyCandidates} marketDay={(dashboard as any).marketDay} />}
         {activePanel === 'alerts'   && <AlertsFeed alerts={dashboard.liveAlerts} marketDay={(dashboard as any).marketDay} />}
         {activePanel === 'news'     && <NewsFeedPanel news={dashboard.newsFeed} />}
