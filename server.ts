@@ -3829,10 +3829,16 @@ Respond ONLY with this JSON structure (fill every field):
       computedAt: new Date().toISOString(),
     };
 
-    // On non-trading days, zero out live-data-dependent fields so the UI doesn't show
-    // fake "changed stocks" from synthetic data re-seeded with today's date.
-    // We preserve signal/confidence (percentile-based, still valid for ranking display)
-    // but zero out intraday price movement, volume spikes, and rally signals.
+    // On non-trading days, zero out ONLY intraday price-movement fields (priceChange,
+    // priceChangePercent, volumeSpike) so the UI doesn't show fake "changed stocks".
+    // We PRESERVE:
+    //   - earlyRallySignal / rallyProbabilityScore  → AI-computed, valid for rankings tab indicators
+    //   - alerts (AI_PREDICTION, INSTITUTIONAL, NEWS) → still meaningful on holidays
+    //   - signal / confidence                        → percentile-based, always valid
+    // We ZERO:
+    //   - priceChange / priceChangePercent / priceAcceleration → intraday only
+    //   - volumeSpike → intraday only (reset to 1x neutral)
+    //   - RALLY + VOLUME alert types → intraday-only signals
     const tradingDay = isMarketDay();
     if (!tradingDay) {
       payload.rankings = payload.rankings.map((r: any) => ({
@@ -3840,14 +3846,13 @@ Respond ONLY with this JSON structure (fill every field):
         priceChange: 0,
         priceChangePercent: 0,
         priceAcceleration: 0,
-        earlyRallySignal: false,
-        rallyProbabilityScore: 0,
         volumeSpike: 1,
-        alerts: [],
         dataSource: 'synthetic',
-        // Keep signal/confidence intact — percentile ranking is still meaningful
+        // Keep earlyRallySignal, rallyProbabilityScore, institutionalSignal, alerts intact
+        // Filter out intraday-only alert types (RALLY, VOLUME) — keep AI/INSTITUTIONAL/NEWS
+        alerts: (r.alerts || []).filter((a: any) => a.alertType !== 'RALLY' && a.alertType !== 'VOLUME'),
       }));
-      // On weekends show top watchlist candidates (by finalScore) so panel isn't empty
+      // earlyRallyCandidates: show top watchlist by finalScore, preserve rally scores
       payload.earlyRallyCandidates = rankedWithSignals
         .slice()
         .sort((a, b) => b.finalScore - a.finalScore)
@@ -3857,18 +3862,17 @@ Respond ONLY with this JSON structure (fill every field):
           priceChange: 0,
           priceChangePercent: 0,
           priceAcceleration: 0,
-          earlyRallySignal: false,
-          rallyProbabilityScore: r.finalScore, // use finalScore as proxy
           volumeSpike: 1,
-          alerts: [],
           dataSource: 'synthetic',
           orbSignal: 'NONE',
           marketClosedWatchlist: true,
+          // Keep rallyProbabilityScore and earlyRallySignal for display
         }));
-      payload.liveAlerts = [];
+      // liveAlerts: keep AI_PREDICTION, INSTITUTIONAL, NEWS alerts — drop RALLY/VOLUME (intraday)
+      payload.liveAlerts = liveAlerts.filter((a: any) => a.alertType !== 'RALLY' && a.alertType !== 'VOLUME');
       payload.summary = {
         ...payload.summary,
-        earlyRallyCount: 0,
+        earlyRallyCount: payload.earlyRallyCandidates.length,
         marketBias: 'NEUTRAL',
       };
     }

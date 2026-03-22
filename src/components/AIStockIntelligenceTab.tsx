@@ -541,7 +541,7 @@ function EarlyRallyPanel({ candidates, marketDay }: { candidates: StockIntellige
       {isWatchlistMode && (
         <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.06] px-3 py-2 flex items-center gap-2">
           <MoonStar size={12} className="text-amber-400 shrink-0" />
-          <p className="text-[10px] text-amber-300/80">Market closed — showing top watchlist candidates by AI score. Live rally signals resume on next trading day.</p>
+          <p className="text-[10px] text-amber-300/80">Market closed — showing top watchlist candidates by AI score. Rally scores are AI-computed and valid. Live ORB/VWAP signals resume on next trading day.</p>
         </div>
       )}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -702,7 +702,7 @@ function AlertsFeed({ alerts, marketDay }: { alerts: StockAlert[]; marketDay?: b
       {marketDay === false && (
         <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.06] px-3 py-2 flex items-center gap-2">
           <MoonStar size={12} className="text-amber-400 shrink-0" />
-          <p className="text-[10px] text-amber-300/80">Market closed — live alerts resume on the next trading day.</p>
+          <p className="text-[10px] text-amber-300/80">Market closed — showing AI, Institutional &amp; News alerts. Intraday Rally/Volume alerts resume on next trading day.</p>
         </div>
       )}
 
@@ -710,7 +710,7 @@ function AlertsFeed({ alerts, marketDay }: { alerts: StockAlert[]; marketDay?: b
         {shown.length === 0 && (
           <div className="flex flex-col items-center justify-center gap-2 py-12 text-white/20">
             <AlertTriangle size={28} className="opacity-30" />
-            <p className="text-sm font-bold">{marketDay === false ? 'No live alerts — market is closed' : 'No alerts'}</p>
+            <p className="text-sm font-bold">No alerts</p>
           </div>
         )}
         {shown.map((a, i) => (
