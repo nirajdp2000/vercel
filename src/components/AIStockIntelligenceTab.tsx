@@ -523,13 +523,21 @@ function RankingsTable({ data }: { data: StockIntelligenceResult[] }) {
 
 // ─── Early Rally Panel ────────────────────────────────────────────────────────
 
-function EarlyRallyPanel({ candidates }: { candidates: StockIntelligenceResult[] }) {
+function EarlyRallyPanel({ candidates, marketDay }: { candidates: StockIntelligenceResult[]; marketDay?: boolean }) {
   if (!candidates.length) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-16 text-white/30">
         <Zap size={32} className="opacity-20" />
-        <p className="text-sm font-bold">No early rally signals detected right now</p>
-        <p className="text-[11px]">The engine scans ORB + VWAP + Volume every 60s during market hours</p>
+        {marketDay === false
+          ? <p className="text-sm font-bold">Early rally signals paused — market is closed</p>
+          : <p className="text-sm font-bold">No early rally signals detected right now</p>
+        }
+        <p className="text-[11px]">
+          {marketDay === false
+            ? 'Signals will resume when NSE/BSE opens on the next trading day'
+            : 'The engine scans ORB + VWAP + Volume every 60s during market hours'
+          }
+        </p>
       </div>
     );
   }
@@ -2096,7 +2104,7 @@ export default function AIStockIntelligenceTab() {
           <div>
             <p className="text-[11px] font-black text-amber-300">Market Closed — Weekend / Holiday</p>
             <p className="text-[10px] text-white/40 leading-relaxed">
-              NSE/BSE is not trading today. Scores and signals shown are based on the last available trading session. Price change figures are frozen at zero — no live movement to report.
+              NSE/BSE is not trading today. Rankings and signals are based on the last trading session. Intraday price changes, volume spikes, and early rally signals are paused until market reopens.
             </p>
           </div>
         </div>
@@ -2211,7 +2219,7 @@ export default function AIStockIntelligenceTab() {
       {/* ── Panel Content ── */}
       <div className="rounded-2xl border border-white/5 bg-black/20 p-4 min-h-[400px]">
         {activePanel === 'rankings' && <RankingsTable data={dashboard.rankings} />}
-        {activePanel === 'rally'    && <EarlyRallyPanel candidates={dashboard.earlyRallyCandidates} />}
+        {activePanel === 'rally'    && <EarlyRallyPanel candidates={dashboard.earlyRallyCandidates} marketDay={(dashboard as any).marketDay} />}
         {activePanel === 'alerts'   && <AlertsFeed alerts={dashboard.liveAlerts} />}
         {activePanel === 'news'     && <NewsFeedPanel news={dashboard.newsFeed} />}
         {activePanel === 'macro'    && <MacroPanel macro={dashboard.macroSnapshot} aiInsights={dashboard.aiInsights} />}

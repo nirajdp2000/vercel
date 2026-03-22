@@ -3725,7 +3725,7 @@ Respond ONLY with this JSON structure (fill every field):
     // earlyRallyCandidates: prefer real ORB signals, fall back to top rallyScore stocks
     const orbCandidates = rankedWithSignals.filter(r => r.earlyRallySignal);
     const earlyRallyCandidates = (
-      orbCandidates.length >= 5
+      orbCandidates.length >= 3
         ? orbCandidates
         : rankedWithSignals.slice().sort((a, b) => b.rallyProbabilityScore - a.rallyProbabilityScore)
     )
@@ -3806,7 +3806,7 @@ Respond ONLY with this JSON structure (fill every field):
       summary: {
         totalScanned: rankedWithSignals.length,
         bullishCount: bullish,
-        earlyRallyCount: orbCandidates.length,
+        earlyRallyCount: earlyRallyCandidates.length,   // use actual candidates list, not just ORB
         highConfidenceCount: highConf,
         averageFinalScore: +avgScore.toFixed(2),
         marketBias: avgScore > 0.60 ? "BULLISH" : avgScore > 0.45 ? "NEUTRAL" : "BEARISH",
@@ -3818,8 +3818,10 @@ Respond ONLY with this JSON structure (fill every field):
       computedAt: new Date().toISOString(),
     };
 
-    // On non-trading days, zero out all price changes so the UI doesn't show
+    // On non-trading days, zero out live-data-dependent fields so the UI doesn't show
     // fake "changed stocks" from synthetic data re-seeded with today's date.
+    // We preserve signal/confidence (percentile-based, still valid for ranking display)
+    // but zero out intraday price movement, volume spikes, and rally signals.
     const tradingDay = isMarketDay();
     if (!tradingDay) {
       payload.rankings = payload.rankings.map((r: any) => ({
@@ -3831,19 +3833,15 @@ Respond ONLY with this JSON structure (fill every field):
         rallyProbabilityScore: 0,
         volumeSpike: 1,
         alerts: [],
-        signal: 'HOLD',
-        confidence: 'LOW',
         dataSource: 'synthetic',
+        // Keep signal/confidence intact — percentile ranking is still meaningful
       }));
       payload.earlyRallyCandidates = [];
-      payload.alerts = [];
+      payload.liveAlerts = [];
       payload.summary = {
         ...payload.summary,
         earlyRallyCount: 0,
         marketBias: 'NEUTRAL',
-        strongBuyCount: 0,
-        buyCount: 0,
-        sellCount: 0,
       };
     }
     payload.marketOpen = tradingDay && isMarketHours();
