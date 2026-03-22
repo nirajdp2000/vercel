@@ -1,12 +1,11 @@
-feat: add VFX/graphics layer to app UI
+ui: redesign UltraQuant tab for better UX
 
-- ParticleCanvas: animated floating particles with connection lines (canvas-based, fixed background)
-- AmbientOrbs: 5 slowly drifting radial gradient orbs (indigo/violet/cyan/emerald)
-- CSS keyframe animations: orb-drift, scan-line, shimmer-x, border-glow-pulse, float-up, neon-flicker, holo-rotate
-- New utility classes: text-shimmer, animate-float-in, animate-neon-flicker, scan-line-container, holo-card, border-glow-animated, border-pulse-indigo/emerald, glow-*-strong
-- Logo title uses text-shimmer animated gradient
-- "Premium Terminal" subtitle uses neon-flicker
-- Logo icon has double pulse ring
-- Header has scan-line sweep effect
-- All tab content fades in with animate-float-in on switch
-- Zero impact on existing functionality
+- Cleaner ScanHeader with inline status dot and collapsible advanced filters
+- KPI strip as 6-column grid with sub-labels (replaces mixed StatCard+histogram row)
+- TopPickCard in right sidebar with score ring, model bars, key metrics grid
+- Score distribution histogram moved to sidebar below top pick
+- SectorPanel and AlertsPanel extracted as clean sidebar components
+- StockTable: expand chevron indicator, thinner score bars, better signal tab styles
+- Main layout: table + heatmap + hedge fund signals on left; sidebar on right
+- Info footer cards at bottom, smaller and less intrusive
+- All functionality preserved (filters, sort, expand, signal filter, scan)

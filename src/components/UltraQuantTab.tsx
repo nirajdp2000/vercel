@@ -3,7 +3,7 @@ import {
   Activity, AlertTriangle, Brain, ChevronDown, ChevronUp,
   Cpu, Gauge, Layers, Radar, RefreshCw, Shield,
   Sparkles, TrendingUp, Waves, Zap, BarChart2, Target, Filter,
-  Star, Award, Flame, TrendingDown
+  Star, Award, Flame, TrendingDown, Info, ChevronRight
 } from 'lucide-react';
 import { HedgeFundSignalRanking, type HedgeFundSignalDashboard } from './HedgeFundSignalRanking';
 import { UltraQuantHeatmap } from './UltraQuantHeatmap';
@@ -72,7 +72,7 @@ const normalizeFilters = (f: Filters): Filters => ({
 
 function ScoreBar({ value, max = 100, color = 'bg-cyan-400', thin = false }: { value: number; max?: number; color?: string; thin?: boolean }) {
   return (
-    <div className={`w-full rounded-full bg-white/5 overflow-hidden ${thin ? 'h-1' : 'h-2'}`}>
+    <div className={`w-full rounded-full bg-white/5 overflow-hidden ${thin ? 'h-1' : 'h-1.5'}`}>
       <div className={`h-full rounded-full transition-all duration-700 ${color}`} style={{ width: `${Math.min(100, (value / max) * 100)}%` }} />
     </div>
   );
@@ -87,21 +87,21 @@ function SignalPill({ action }: { action: string }) {
   };
   return (
     <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.15em] ${map[action] ?? 'bg-white/10 text-zinc-300 border-white/10'}`}>
-      {action}
+      {action.replace('_', ' ')}
     </span>
   );
 }
 
 function RegimePill({ regime }: { regime: string }) {
   const map: Record<string, string> = {
-    'Trending Up':             'text-emerald-400 bg-emerald-500/10',
-    'Trending Down':           'text-rose-400 bg-rose-500/10',
-    'High Volatility':         'text-amber-400 bg-amber-500/10',
-    'Low Volatility Sideways': 'text-cyan-400 bg-cyan-500/10',
-    'Sideways':                'text-zinc-400 bg-white/5',
+    'Trending Up':             'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
+    'Trending Down':           'text-rose-400 bg-rose-500/10 border-rose-500/20',
+    'High Volatility':         'text-amber-400 bg-amber-500/10 border-amber-500/20',
+    'Low Volatility Sideways': 'text-cyan-400 bg-cyan-500/10 border-cyan-500/20',
+    'Sideways':                'text-zinc-400 bg-white/5 border-white/10',
   };
   return (
-    <span className={`rounded px-1.5 py-0.5 text-[8px] font-black uppercase tracking-[0.1em] ${map[regime] ?? 'text-zinc-400 bg-white/5'}`}>
+    <span className={`rounded-lg border px-1.5 py-0.5 text-[8px] font-black uppercase tracking-[0.1em] ${map[regime] ?? 'text-zinc-400 bg-white/5 border-white/10'}`}>
       {regime}
     </span>
   );
@@ -121,93 +121,91 @@ function RankBadge({ rank }: { rank: number }) {
   return <span className="text-[9px] text-zinc-600 font-mono w-5 text-center">{rank}</span>;
 }
 
-function StatCard({ label, value, sub, color = 'text-white', icon: Icon }: { label: string; value: string | number; sub?: string; color?: string; icon?: React.ElementType }) {
-  return (
-    <div className="rounded-2xl border border-white/5 bg-black/25 p-4">
-      <div className="flex items-center justify-between mb-1.5">
-        <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-500">{label}</p>
-        {Icon && <Icon size={11} className="text-zinc-600" />}
-      </div>
-      <p className={`text-2xl font-black leading-none ${color}`}>{value}</p>
-      {sub && <p className="text-[9px] text-zinc-600 mt-1">{sub}</p>}
-    </div>
-  );
-}
-
-/** Mini score distribution histogram — 5 buckets */
+/** Mini score distribution histogram */
 function ScoreHistogram({ results }: { results: AnalysisResult[] }) {
   if (!results.length) return null;
-  const buckets = [0, 0, 0, 0, 0]; // 0-20, 20-40, 40-60, 60-80, 80-100
+  const buckets = [0, 0, 0, 0, 0];
   results.forEach(r => { buckets[Math.min(4, Math.floor(r.score / 20))]++; });
   const max = Math.max(...buckets, 1);
   const labels = ['0-20', '20-40', '40-60', '60-80', '80+'];
   const colors = ['bg-zinc-600', 'bg-zinc-500', 'bg-amber-500', 'bg-cyan-400', 'bg-emerald-400'];
   return (
-    <div className="rounded-2xl border border-white/5 bg-black/25 p-4">
-      <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-500 mb-3">Score Distribution</p>
-      <div className="flex items-end gap-1.5 h-10">
-        {buckets.map((count, i) => (
-          <div key={i} className="flex-1 flex flex-col items-center gap-1">
-            <span className="text-[8px] text-zinc-600 font-mono">{count}</span>
-            <div className={`w-full rounded-t ${colors[i]} transition-all duration-700`} style={{ height: `${Math.max(4, (count / max) * 28)}px` }} />
-          </div>
-        ))}
-      </div>
-      <div className="flex gap-1.5 mt-1">
-        {labels.map((l, i) => <span key={i} className="flex-1 text-center text-[7px] text-zinc-600">{l}</span>)}
-      </div>
+    <div className="flex items-end gap-1 h-8">
+      {buckets.map((count, i) => (
+        <div key={i} title={`${labels[i]}: ${count}`} className="flex-1 flex flex-col items-center gap-0.5">
+          <div className={`w-full rounded-t ${colors[i]}`} style={{ height: `${Math.max(3, (count / max) * 28)}px` }} />
+        </div>
+      ))}
     </div>
   );
 }
 
-// ─── Filter Panel ─────────────────────────────────────────────────────────────
+// ─── Scan Controls Header ─────────────────────────────────────────────────────
 
-function FilterPanel({ filters, setFilters, onScan, onReset, loading }: {
+function ScanHeader({ filters, setFilters, onScan, onReset, loading, lastRefreshed, sum }: {
   filters: Filters; setFilters: (f: Filters) => void;
   onScan: () => void; onReset: () => void; loading: boolean;
+  lastRefreshed: Date | null;
+  sum?: UltraQuantDashboard['summary'];
 }) {
-  const [open, setOpen] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
   const inp = 'w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-[12px] text-white outline-none focus:border-cyan-400/40 transition-colors';
 
   return (
-    <div className="rounded-[2rem] border border-cyan-500/10 bg-[radial-gradient(circle_at_top_right,rgba(34,211,238,0.12),transparent_40%),linear-gradient(180deg,rgba(4,10,18,0.97),rgba(8,12,18,0.97))] p-6 shadow-2xl shadow-black/40">
-      <div className="flex flex-wrap items-center justify-between gap-4 mb-5">
-        <div>
-          <p className="inline-flex items-center gap-2 rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-[9px] font-black uppercase tracking-[0.3em] text-cyan-300 mb-2">
-            <Cpu size={11} /> Ultra Quant Analyzer
-          </p>
-          <h2 className="text-2xl font-black tracking-tight text-white">Institutional Multibagger Scanner</h2>
-          <p className="text-[11px] text-zinc-500 mt-1">CAGR · Momentum · Regime · Order Flow · AI Signal Fusion</p>
+    <div className="rounded-2xl border border-cyan-500/15 bg-gradient-to-br from-cyan-950/40 via-slate-950/60 to-slate-950/80 shadow-xl shadow-black/30 overflow-hidden">
+      {/* Top bar */}
+      <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 border-b border-white/5">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-cyan-400/10 border border-cyan-400/20">
+            <Cpu size={16} className="text-cyan-400" />
+          </div>
+          <div>
+            <p className="text-[13px] font-black text-white tracking-tight">Ultra Quant Analyzer</p>
+            <p className="text-[9px] text-zinc-500 uppercase tracking-[0.2em]">Institutional Multibagger Scanner</p>
+          </div>
         </div>
+
+        {/* Status dot */}
+        <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.15em]">
+          <span className={`h-2 w-2 rounded-full ${loading ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`} />
+          <span className="text-zinc-500">
+            {loading ? 'Scanning…' : lastRefreshed
+              ? `Updated ${lastRefreshed.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`
+              : 'Ready'}
+          </span>
+        </div>
+
+        {/* Action buttons */}
         <div className="flex items-center gap-2">
-          <button onClick={onScan} disabled={loading}
-            className="inline-flex items-center gap-2 rounded-xl bg-cyan-400 px-5 py-2.5 text-[11px] font-black uppercase tracking-[0.2em] text-slate-950 transition hover:bg-cyan-300 disabled:opacity-60">
-            {loading ? <Activity size={13} className="animate-spin" /> : <Zap size={13} />}
-            {loading ? 'Scanning…' : 'Run Scan'}
+          <button onClick={() => setShowFilters(o => !o)}
+            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[10px] font-black uppercase tracking-[0.15em] transition-all ${showFilters ? 'border-cyan-400/30 bg-cyan-400/10 text-cyan-300' : 'border-white/10 bg-black/25 text-zinc-400 hover:text-white'}`}>
+            <Filter size={11} /> Filters {showFilters ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
           </button>
           <button onClick={onReset}
-            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-black/25 px-4 py-2.5 text-[11px] font-black uppercase tracking-[0.2em] text-zinc-400 hover:text-white hover:border-cyan-400/30 transition">
-            <RefreshCw size={12} /> Reset
+            className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-[10px] font-black uppercase tracking-[0.15em] text-zinc-400 hover:text-white hover:border-white/20 transition">
+            <RefreshCw size={11} /> Reset
           </button>
-          <button onClick={() => setOpen(o => !o)}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-black/25 px-4 py-2.5 text-[11px] font-black uppercase tracking-[0.2em] text-zinc-400 hover:text-white transition">
-            <Filter size={12} /> Filters {open ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+          <button onClick={onScan} disabled={loading}
+            className="inline-flex items-center gap-2 rounded-xl bg-cyan-400 px-5 py-2 text-[11px] font-black uppercase tracking-[0.2em] text-slate-950 transition hover:bg-cyan-300 disabled:opacity-60 shadow-lg shadow-cyan-400/20">
+            {loading ? <Activity size={12} className="animate-spin" /> : <Zap size={12} />}
+            {loading ? 'Scanning…' : 'Run Scan'}
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <label className="space-y-1.5">
+      {/* Quick filters row — always visible */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 px-5 py-4">
+        <label className="space-y-1">
           <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-500">History (yrs)</span>
           <input type="number" min={1} max={15} value={filters.historicalPeriodYears}
             onChange={e => setFilters({ ...filters, historicalPeriodYears: Number(e.target.value) })} className={inp} />
         </label>
-        <label className="space-y-1.5">
+        <label className="space-y-1">
           <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-500">Min CAGR (%)</span>
           <input type="number" value={filters.minCagr}
             onChange={e => setFilters({ ...filters, minCagr: Number(e.target.value) })} className={inp} />
         </label>
-        <label className="space-y-1.5">
+        <label className="space-y-1">
           <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-500">Sector</span>
           <select value={filters.sectorFilter}
             onChange={e => setFilters({ ...filters, sectorFilter: e.target.value })}
@@ -215,47 +213,203 @@ function FilterPanel({ filters, setFilters, onScan, onReset, loading }: {
             {sectors.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
         </label>
-        <label className="space-y-1.5">
+        <label className="space-y-1">
           <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-500">Max Drawdown (%)</span>
           <input type="number" value={filters.maxDrawdown}
             onChange={e => setFilters({ ...filters, maxDrawdown: Number(e.target.value) })} className={inp} />
         </label>
       </div>
 
-      {open && (
-        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6 border-t border-white/5 pt-4">
-          <label className="space-y-1.5">
+      {/* Advanced filters — collapsible */}
+      {showFilters && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6 px-5 pb-4 border-t border-white/5 pt-4">
+          <label className="space-y-1">
             <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-500">Min Cap (Cr)</span>
             <input type="number" value={filters.minMarketCap}
               onChange={e => setFilters({ ...filters, minMarketCap: Number(e.target.value) })} className={inp} />
           </label>
-          <label className="space-y-1.5">
+          <label className="space-y-1">
             <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-500">Max Cap (Cr)</span>
             <input type="number" value={filters.maxMarketCap}
               onChange={e => setFilters({ ...filters, maxMarketCap: Number(e.target.value) })} className={inp} />
           </label>
-          <label className="space-y-1.5">
+          <label className="space-y-1">
             <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-500">Min Volume</span>
             <input type="number" value={filters.minVolume}
               onChange={e => setFilters({ ...filters, minVolume: Number(e.target.value) })} className={inp} />
           </label>
-          <label className="space-y-1.5">
+          <label className="space-y-1">
             <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-500">Volatility ≤</span>
             <input type="number" step="0.01" value={filters.volatilityThreshold}
               onChange={e => setFilters({ ...filters, volatilityThreshold: Number(e.target.value) })} className={inp} />
           </label>
-          <label className="space-y-1.5">
+          <label className="space-y-1">
             <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-500">Breakout Freq ≥</span>
             <input type="number" step="0.01" value={filters.breakoutFrequency}
               onChange={e => setFilters({ ...filters, breakoutFrequency: Number(e.target.value) })} className={inp} />
           </label>
-          <label className="space-y-1.5">
+          <label className="space-y-1">
             <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-500">Trend Strength ≥</span>
             <input type="number" step="0.01" value={filters.trendStrengthThreshold}
               onChange={e => setFilters({ ...filters, trendStrengthThreshold: Number(e.target.value) })} className={inp} />
           </label>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── KPI Strip ────────────────────────────────────────────────────────────────
+
+function KpiStrip({ sum, results }: { sum: UltraQuantDashboard['summary']; results: AnalysisResult[] }) {
+  const kpis = [
+    { label: 'Universe',     value: sum.scannedUniverse.toLocaleString(), icon: Layers,    color: 'text-white',       sub: 'stocks scanned' },
+    { label: 'Returned',     value: sum.returned,                         icon: Target,    color: 'text-cyan-300',    sub: 'passed filters' },
+    { label: 'Multibaggers', value: sum.multibaggerCandidates,            icon: Flame,     color: 'text-emerald-400', sub: '5x–10x candidates' },
+    { label: 'Buy Signals',  value: sum.buySignals,                       icon: TrendingUp,color: 'text-emerald-300', sub: 'BUY + STRONG BUY' },
+    { label: 'Avg Score',    value: sum.avgScore?.toFixed(1) ?? '--',     icon: BarChart2, color: 'text-amber-300',   sub: 'composite score' },
+    { label: 'History',      value: `${sum.historicalPeriodYears}y`,      icon: Radar,     color: 'text-zinc-300',    sub: 'lookback period' },
+  ];
+  return (
+    <div className="grid grid-cols-3 gap-2.5 sm:grid-cols-6">
+      {kpis.map(k => (
+        <div key={k.label} className="rounded-xl border border-white/5 bg-black/25 px-3 py-3 flex flex-col gap-1">
+          <div className="flex items-center justify-between">
+            <span className="text-[8px] font-bold uppercase tracking-[0.2em] text-zinc-500">{k.label}</span>
+            <k.icon size={10} className="text-zinc-600" />
+          </div>
+          <p className={`text-xl font-black leading-none ${k.color}`}>{k.value}</p>
+          <p className="text-[8px] text-zinc-600">{k.sub}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Top Pick Card ────────────────────────────────────────────────────────────
+
+function TopPickCard({ stock }: { stock: AnalysisResult }) {
+  return (
+    <div className="rounded-2xl border border-cyan-500/20 bg-gradient-to-br from-cyan-950/40 via-slate-950/60 to-slate-950/80 p-5 space-y-4">
+      {/* Badge + symbol */}
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <p className="text-[8px] font-black uppercase tracking-[0.25em] text-cyan-400 mb-1.5">🥇 Top Pick</p>
+          <p className="text-2xl font-black text-white leading-none">{cleanSymbol(stock.symbol)}</p>
+          <p className="text-[9px] text-zinc-500 mt-1 uppercase tracking-[0.15em]">{stock.sector} · {stock.industry}</p>
+        </div>
+        <SignalPill action={stock.rlAction} />
+      </div>
+
+      {/* Score ring area */}
+      <div className="flex items-center gap-4">
+        <div className="flex flex-col items-center justify-center w-16 h-16 rounded-full border-2 border-cyan-400/30 bg-cyan-400/5 shrink-0">
+          <p className="text-xl font-black text-cyan-300 leading-none">{stock.score.toFixed(0)}</p>
+          <p className="text-[7px] text-zinc-500 uppercase tracking-[0.1em]">Score</p>
+        </div>
+        <div className="flex-1 space-y-2">
+          {[
+            { label: 'AI Signal',  value: stock.finalPredictionScore, color: 'bg-emerald-400', text: 'text-emerald-300' },
+            { label: 'Grad Boost', value: stock.gradientBoostProb,    color: 'bg-cyan-400',    text: 'text-cyan-300' },
+            { label: 'Sentiment',  value: stock.sentimentScore,       color: 'bg-amber-400',   text: 'text-amber-300' },
+          ].map(m => (
+            <div key={m.label}>
+              <div className="flex items-center justify-between mb-0.5">
+                <span className="text-[8px] text-zinc-500 uppercase tracking-[0.1em]">{m.label}</span>
+                <span className={`text-[9px] font-black ${m.text}`}>{m.value.toFixed(1)}%</span>
+              </div>
+              <ScoreBar value={m.value} color={m.color} thin />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Key metrics grid */}
+      <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+        {[
+          { label: 'CAGR',         value: `${stock.cagr.toFixed(1)}%`,              color: stock.cagr >= 20 ? 'text-emerald-400' : 'text-zinc-300' },
+          { label: 'Momentum',     value: `${stock.momentum.toFixed(2)}x`,           color: 'text-cyan-300' },
+          { label: 'Max DD',       value: `${stock.maxDrawdown.toFixed(1)}%`,        color: stock.maxDrawdown <= 25 ? 'text-emerald-400' : 'text-amber-400' },
+          { label: 'Order Imbal.', value: `${stock.orderImbalance.toFixed(2)}x`,     color: stock.orderImbalance >= 2.5 ? 'text-violet-400' : 'text-zinc-300' },
+          { label: 'DD Prob',      value: `${stock.drawdownProbability.toFixed(1)}%`,color: 'text-rose-400' },
+          { label: 'Position',     value: `${stock.positionSize.toFixed(0)} sh`,     color: 'text-emerald-400' },
+        ].map(m => (
+          <div key={m.label} className="rounded-lg bg-white/[0.03] border border-white/5 px-2.5 py-2">
+            <p className="text-[8px] text-zinc-500 uppercase tracking-[0.1em] mb-0.5">{m.label}</p>
+            <p className={`font-black ${m.color}`}>{m.value}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Regime + state */}
+      <div className="flex items-center justify-between pt-1 border-t border-white/5">
+        <RegimePill regime={stock.marketRegime} />
+        <span className="text-[9px] text-zinc-500">HMM: <span className="text-amber-300 font-black">{stock.marketState}</span></span>
+        <span className="text-[9px] text-zinc-500">LSTM: <span className="text-cyan-300 font-black">{stock.lstmPredictedPrice.toFixed(1)}</span></span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Sector Rotation Sidebar ──────────────────────────────────────────────────
+
+function SectorPanel({ sectorRows }: { sectorRows: UltraQuantDashboard['sectors'] }) {
+  return (
+    <div className="rounded-2xl border border-white/5 bg-zinc-950/70 p-4 space-y-3">
+      <h3 className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-white">
+        <Waves size={12} className="text-emerald-300" /> Sector Rotation
+      </h3>
+      <div className="space-y-2">
+        {sectorRows.slice(0, 7).map((s, i) => {
+          const maxScore = sectorRows[0]?.averageScore || 100;
+          return (
+            <div key={s.sector} className="rounded-xl border border-white/5 bg-black/20 px-3 py-2.5">
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[8px] text-zinc-600 font-mono w-3">{i + 1}</span>
+                  <span className="text-[11px] font-black text-white">{s.sector}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-black text-emerald-400">{s.averageScore.toFixed(1)}</span>
+                  <span className="text-[8px] text-zinc-600">str {s.sectorStrength.toFixed(2)}</span>
+                </div>
+              </div>
+              <ScoreBar value={s.averageScore} max={maxScore} color="bg-emerald-400" thin />
+              <p className="text-[8px] text-zinc-600 mt-1 truncate">{s.leaders.slice(0, 3).map(cleanSymbol).join(' · ')}</p>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Alerts Sidebar ───────────────────────────────────────────────────────────
+
+function AlertsPanel({ alerts }: { alerts: UltraQuantDashboard['alerts'] }) {
+  return (
+    <div className="rounded-2xl border border-white/5 bg-zinc-950/70 p-4 space-y-3">
+      <h3 className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-white">
+        <AlertTriangle size={12} className="text-rose-300" /> Live Alerts
+        {alerts.length > 0 && (
+          <span className="ml-auto rounded-full bg-rose-500/20 border border-rose-500/30 px-1.5 py-0.5 text-[8px] font-black text-rose-300">{alerts.length}</span>
+        )}
+      </h3>
+      <div className="space-y-1.5">
+        {alerts.slice(0, 8).map((a, i) => (
+          <div key={`${a.stockSymbol}-${i}`} className="rounded-xl border border-rose-500/10 bg-rose-500/[0.04] px-3 py-2.5">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[11px] font-black text-white">{cleanSymbol(a.stockSymbol)}</span>
+              <span className="text-[10px] font-black text-rose-300">{a.confidenceScore.toFixed(1)}%</span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[8px] uppercase tracking-[0.12em] text-zinc-500 shrink-0">{a.signalType}</span>
+              <ScoreBar value={a.confidenceScore} color="bg-rose-400" thin />
+            </div>
+          </div>
+        ))}
+        {alerts.length === 0 && <p className="text-[11px] text-zinc-600 text-center py-3">No active alerts</p>}
+      </div>
     </div>
   );
 }
@@ -290,21 +444,21 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
     SELL: results.filter(r => r.rlAction === 'SELL').length,
   };
 
-  const signalTabs: Array<{ key: SignalFilter; label: string; cls: string }> = [
-    { key: 'ALL',        label: 'All',         cls: 'text-zinc-300 border-white/10 hover:border-cyan-400/30' },
-    { key: 'STRONG_BUY', label: 'Strong Buy',  cls: 'text-emerald-300 border-emerald-500/20 hover:border-emerald-400/40' },
-    { key: 'BUY',        label: 'Buy',         cls: 'text-emerald-400 border-emerald-500/15 hover:border-emerald-400/30' },
-    { key: 'HOLD',       label: 'Hold',        cls: 'text-amber-300 border-amber-500/20 hover:border-amber-400/30' },
-    { key: 'SELL',       label: 'Sell',        cls: 'text-rose-400 border-rose-500/20 hover:border-rose-400/30' },
+  const signalTabs: Array<{ key: SignalFilter; label: string; active: string; inactive: string }> = [
+    { key: 'ALL',        label: 'All',         active: 'bg-white/10 text-white border-white/20',                    inactive: 'text-zinc-400 border-white/8' },
+    { key: 'STRONG_BUY', label: 'Strong Buy',  active: 'bg-emerald-500/20 text-emerald-200 border-emerald-400/30', inactive: 'text-emerald-500/60 border-emerald-500/15' },
+    { key: 'BUY',        label: 'Buy',         active: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/20', inactive: 'text-emerald-500/50 border-emerald-500/10' },
+    { key: 'HOLD',       label: 'Hold',        active: 'bg-amber-500/15 text-amber-300 border-amber-500/20',       inactive: 'text-amber-500/50 border-amber-500/10' },
+    { key: 'SELL',       label: 'Sell',        active: 'bg-rose-500/15 text-rose-300 border-rose-500/20',          inactive: 'text-rose-500/50 border-rose-500/10' },
   ];
 
-  const cols: Array<{ key: keyof AnalysisResult; label: string }> = [
-    { key: 'score',                label: 'Score' },
-    { key: 'cagr',                 label: 'CAGR' },
-    { key: 'momentum',             label: 'Mom' },
-    { key: 'finalPredictionScore', label: 'AI %' },
-    { key: 'orderImbalance',       label: 'OI' },
-    { key: 'maxDrawdown',          label: 'DD%' },
+  const cols: Array<{ key: keyof AnalysisResult; label: string; tip: string }> = [
+    { key: 'score',                label: 'Score', tip: 'Composite quant score' },
+    { key: 'cagr',                 label: 'CAGR',  tip: 'Compound annual growth rate' },
+    { key: 'momentum',             label: 'Mom',   tip: 'Price momentum multiplier' },
+    { key: 'finalPredictionScore', label: 'AI %',  tip: 'AI prediction confidence' },
+    { key: 'orderImbalance',       label: 'OI',    tip: 'Order imbalance ratio' },
+    { key: 'maxDrawdown',          label: 'DD%',   tip: 'Max historical drawdown' },
   ];
 
   const SortIcon = ({ k }: { k: keyof AnalysisResult }) =>
@@ -313,14 +467,14 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
       : <ChevronDown size={9} className="opacity-20 inline ml-0.5" />;
 
   return (
-    <div className="rounded-[2rem] border border-white/5 bg-zinc-950/70 shadow-2xl shadow-black/30 min-w-0 overflow-hidden">
-      {/* Header */}
-      <div className="border-b border-white/5 px-5 py-4 space-y-3">
+    <div className="rounded-2xl border border-white/5 bg-zinc-950/70 shadow-xl shadow-black/20 overflow-hidden">
+      {/* Table header controls */}
+      <div className="border-b border-white/5 px-4 py-3 space-y-2.5">
         <div className="flex items-center justify-between gap-3">
           <h3 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-white shrink-0">
-            <TrendingUp size={14} className="text-cyan-300" /> Top Bullish Stocks
+            <TrendingUp size={13} className="text-cyan-300" /> Stock Results
           </h3>
-          <div className="flex items-center gap-2 rounded-xl border border-white/8 bg-white/5 px-3 py-1.5 flex-1 max-w-[200px]">
+          <div className="flex items-center gap-2 rounded-xl border border-white/8 bg-white/5 px-3 py-1.5 flex-1 max-w-[220px]">
             <Filter size={10} className="text-white/30" />
             <input value={search} onChange={e => setSearch(e.target.value)}
               placeholder="Symbol / sector…"
@@ -328,32 +482,32 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
           </div>
           <span className="text-[10px] text-zinc-500 font-bold shrink-0">{filtered.length} stocks</span>
         </div>
-
         {/* Signal filter tabs */}
         <div className="flex flex-wrap gap-1.5">
           {signalTabs.map(tab => (
             <button key={tab.key}
               onClick={() => setSignalFilter(tab.key)}
-              className={`rounded-lg border px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.15em] transition-all ${tab.cls} ${signalFilter === tab.key ? 'bg-white/8' : 'bg-transparent opacity-60 hover:opacity-100'}`}>
+              className={`rounded-lg border px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.12em] transition-all ${signalFilter === tab.key ? tab.active : tab.inactive + ' hover:opacity-100 opacity-70'}`}>
               {tab.label} <span className="opacity-60">({counts[tab.key]})</span>
             </button>
           ))}
         </div>
       </div>
 
-      <div className="overflow-x-auto max-h-[44rem] overflow-y-auto">
+      <div className="overflow-x-auto max-h-[42rem] overflow-y-auto">
         <table className="w-full min-w-[640px] text-left">
           <thead className="sticky top-0 bg-zinc-950/98 text-[9px] font-bold uppercase tracking-[0.18em] text-zinc-500 border-b border-white/5">
             <tr>
-              <th className="px-5 py-3">Stock</th>
+              <th className="px-4 py-3">Stock</th>
               {cols.map(c => (
-                <th key={String(c.key)} className="cursor-pointer px-3 py-3 text-left"
+                <th key={String(c.key)} title={c.tip} className="cursor-pointer px-3 py-3 text-left hover:text-zinc-300 transition-colors"
                   onClick={() => { setSortKey(c.key); setSortDir(d => sortKey === c.key ? (d === 'desc' ? 'asc' : 'desc') : 'desc'); }}>
                   {c.label}<SortIcon k={c.key} />
                 </th>
               ))}
               <th className="px-3 py-3">Regime</th>
               <th className="px-3 py-3">Signal</th>
+              <th className="px-3 py-3 w-8"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-white/[0.04]">
@@ -361,13 +515,11 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
               <React.Fragment key={stock.symbol}>
                 <tr
                   onClick={() => setExpanded(expanded === stock.symbol ? null : stock.symbol)}
-                  className={`cursor-pointer transition-colors hover:bg-white/[0.03] ${expanded === stock.symbol ? 'bg-cyan-500/[0.05]' : ''}`}
+                  className={`cursor-pointer transition-colors hover:bg-white/[0.025] ${expanded === stock.symbol ? 'bg-cyan-500/[0.04]' : ''}`}
                 >
-                  <td className="px-5 py-3">
+                  <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
-                      <div className="w-6 shrink-0 flex justify-center">
-                        <RankBadge rank={i + 1} />
-                      </div>
+                      <div className="w-6 shrink-0 flex justify-center"><RankBadge rank={i + 1} /></div>
                       <div>
                         <div className="flex items-center gap-1.5">
                           <p className="text-[12px] font-black text-white">{cleanSymbol(stock.symbol)}</p>
@@ -377,11 +529,10 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
                       </div>
                     </div>
                   </td>
-                  {/* Score with bar */}
                   <td className="px-3 py-3 w-20">
-                    <div className="space-y-1.5">
+                    <div className="space-y-1">
                       <span className="text-[11px] font-black text-cyan-300">{stock.score.toFixed(1)}</span>
-                      <ScoreBar value={stock.score} color="bg-cyan-400" />
+                      <ScoreBar value={stock.score} color="bg-cyan-400" thin />
                     </div>
                   </td>
                   <td className={`px-3 py-3 text-[11px] font-bold ${stock.cagr >= 20 ? 'text-emerald-400' : 'text-zinc-300'}`}>
@@ -389,9 +540,9 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
                   </td>
                   <td className="px-3 py-3 text-[11px] text-zinc-300 font-bold">{stock.momentum.toFixed(2)}x</td>
                   <td className="px-3 py-3 w-20">
-                    <div className="space-y-1.5">
+                    <div className="space-y-1">
                       <span className="text-[11px] font-black text-emerald-400">{stock.finalPredictionScore.toFixed(1)}%</span>
-                      <ScoreBar value={stock.finalPredictionScore} color="bg-emerald-400" />
+                      <ScoreBar value={stock.finalPredictionScore} color="bg-emerald-400" thin />
                     </div>
                   </td>
                   <td className={`px-3 py-3 text-[11px] font-bold ${stock.orderImbalance >= 2.5 ? 'text-violet-400' : 'text-zinc-400'}`}>
@@ -402,27 +553,30 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
                   </td>
                   <td className="px-3 py-3"><RegimePill regime={stock.marketRegime} /></td>
                   <td className="px-3 py-3"><SignalPill action={stock.rlAction} /></td>
+                  <td className="px-3 py-3 text-zinc-600">
+                    {expanded === stock.symbol ? <ChevronUp size={12} /> : <ChevronRight size={12} />}
+                  </td>
                 </tr>
                 {expanded === stock.symbol && (
-                  <tr className="bg-cyan-500/[0.04] border-b border-cyan-500/10">
-                    <td colSpan={9} className="px-5 py-4">
-                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-6 text-[10px]">
+                  <tr className="bg-cyan-500/[0.03] border-b border-cyan-500/10">
+                    <td colSpan={10} className="px-4 py-4">
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-6 text-[10px]">
                         {[
-                          { label: 'Growth Ratio',   value: `${stock.growthRatio.toFixed(2)}x`,          color: 'text-emerald-400' },
-                          { label: 'Earnings Growth', value: `${stock.earningsGrowth.toFixed(1)}%`,       color: 'text-cyan-400' },
-                          { label: 'Revenue Growth',  value: `${stock.revenueGrowth.toFixed(1)}%`,        color: 'text-cyan-300' },
-                          { label: 'Volume Growth',   value: `${stock.volumeGrowth.toFixed(1)}%`,         color: 'text-amber-400' },
-                          { label: 'Sentiment',       value: `${stock.sentimentScore.toFixed(1)}%`,       color: 'text-violet-400' },
-                          { label: 'Gradient Boost',  value: `${stock.gradientBoostProb.toFixed(1)}%`,    color: 'text-white' },
-                          { label: 'LSTM Price',      value: stock.lstmPredictedPrice.toFixed(2),         color: 'text-cyan-300' },
-                          { label: 'HMM State',       value: stock.marketState,                           color: 'text-amber-300' },
-                          { label: 'Drawdown Prob',   value: `${stock.drawdownProbability.toFixed(1)}%`,  color: 'text-rose-400' },
-                          { label: 'Position Size',   value: `${stock.positionSize.toFixed(0)} sh`,       color: 'text-emerald-400' },
+                          { label: 'Growth Ratio',    value: `${stock.growthRatio.toFixed(2)}x`,                    color: 'text-emerald-400' },
+                          { label: 'Earnings Growth', value: `${stock.earningsGrowth.toFixed(1)}%`,                 color: 'text-cyan-400' },
+                          { label: 'Revenue Growth',  value: `${stock.revenueGrowth.toFixed(1)}%`,                  color: 'text-cyan-300' },
+                          { label: 'Volume Growth',   value: `${stock.volumeGrowth.toFixed(1)}%`,                   color: 'text-amber-400' },
+                          { label: 'Sentiment',       value: `${stock.sentimentScore.toFixed(1)}%`,                 color: 'text-violet-400' },
+                          { label: 'Gradient Boost',  value: `${stock.gradientBoostProb.toFixed(1)}%`,              color: 'text-white' },
+                          { label: 'LSTM Price',      value: stock.lstmPredictedPrice.toFixed(2),                   color: 'text-cyan-300' },
+                          { label: 'HMM State',       value: stock.marketState,                                     color: 'text-amber-300' },
+                          { label: 'Drawdown Prob',   value: `${stock.drawdownProbability.toFixed(1)}%`,            color: 'text-rose-400' },
+                          { label: 'Position Size',   value: `${stock.positionSize.toFixed(0)} sh`,                 color: 'text-emerald-400' },
                           { label: 'POC/VAH/VAL',     value: `${stock.volumeProfile?.poc?.toFixed(0) ?? '--'} / ${stock.volumeProfile?.vah?.toFixed(0) ?? '--'} / ${stock.volumeProfile?.val?.toFixed(0) ?? '--'}`, color: 'text-zinc-300' },
-                          { label: 'Breakout Freq',   value: `${(stock.breakoutFrequency * 100).toFixed(1)}%`, color: 'text-amber-400' },
+                          { label: 'Breakout Freq',   value: `${(stock.breakoutFrequency * 100).toFixed(1)}%`,      color: 'text-amber-400' },
                         ].map(m => (
                           <div key={m.label} className="rounded-xl bg-white/[0.03] border border-white/5 px-3 py-2">
-                            <p className="text-zinc-500 uppercase tracking-[0.12em] mb-0.5">{m.label}</p>
+                            <p className="text-zinc-500 uppercase tracking-[0.1em] mb-0.5 text-[8px]">{m.label}</p>
                             <p className={`font-black ${m.color}`}>{m.value}</p>
                           </div>
                         ))}
@@ -482,237 +636,97 @@ const UltraQuantTab = () => {
   const sum = dashboard?.summary;
 
   return (
-    <div className="space-y-6">
-      {/* Filter panel */}
-      <FilterPanel
+    <div className="space-y-5">
+
+      {/* ── 1. Scan Controls ── */}
+      <ScanHeader
         filters={filters} setFilters={setFilters}
         onScan={() => runScan()} loading={loading}
         onReset={() => { startTransition(() => setFilters(defaultFilters)); runScan(defaultFilters); }}
+        lastRefreshed={lastRefreshed} sum={sum}
       />
 
-      {/* Status bar */}
-      <div className="flex flex-wrap items-center gap-3 px-1">
-        <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.15em]">
-          <span className={`h-2 w-2 rounded-full ${loading ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`} />
-          <span className="text-zinc-500">
-            {loading ? 'Scanning universe…' : lastRefreshed
-              ? `Updated ${lastRefreshed.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`
-              : 'Ready'}
-          </span>
-        </div>
-        {error && <span className="text-[11px] text-rose-400 font-bold">{error}</span>}
-      </div>
-
-      {/* KPI row + score distribution */}
-      {sum && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-7">
-          <StatCard label="Universe"     value={sum.scannedUniverse}                  color="text-white"      icon={Layers} />
-          <StatCard label="Returned"     value={sum.returned}                         color="text-cyan-300"   icon={Target} />
-          <StatCard label="Multibaggers" value={sum.multibaggerCandidates}            color="text-emerald-400" icon={Flame} />
-          <StatCard label="Buy Signals"  value={sum.buySignals}                       color="text-emerald-300" icon={TrendingUp} />
-          <StatCard label="Avg Score"    value={sum.avgScore?.toFixed(1) ?? '--'}     color="text-amber-300"  icon={BarChart2} />
-          <StatCard label="History"      value={`${sum.historicalPeriodYears}y`}      color="text-zinc-300"   icon={Radar} />
-          <ScoreHistogram results={results} />
+      {/* ── Error ── */}
+      {error && (
+        <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 px-4 py-3 text-[12px] text-rose-400 font-bold">
+          {error}
         </div>
       )}
 
-      {/* Loading skeleton */}
+      {/* ── 2. KPI Strip ── */}
+      {sum && <KpiStrip sum={sum} results={results} />}
+
+      {/* ── 3. Loading skeleton ── */}
       {loading && (
-        <div className="rounded-[2rem] border border-cyan-500/10 bg-zinc-950/70 p-8 flex items-center gap-3 text-sm text-zinc-400">
+        <div className="rounded-2xl border border-cyan-500/10 bg-zinc-950/70 p-8 flex items-center gap-3 text-sm text-zinc-400">
           <Activity size={16} className="animate-spin text-cyan-300" />
           Running ultra quant scan across the universe and model stack…
         </div>
       )}
 
-      {/* No results */}
+      {/* ── 4. No results ── */}
       {dashboard && !loading && results.length === 0 && (
-        <div className="rounded-[2rem] border border-amber-500/10 bg-amber-500/5 p-6 text-sm text-zinc-300">
-          No stocks matched the current filters. Try lowering Min CAGR, increasing Max Drawdown, or setting Sector to ALL.
+        <div className="rounded-2xl border border-amber-500/10 bg-amber-500/5 p-6 text-[12px] text-amber-400 font-bold text-center">
+          No stocks matched the current filters. Try relaxing CAGR or drawdown thresholds.
         </div>
       )}
 
-      {/* Top pick hero */}
-      {topPick && !loading && (
-        <section className="grid grid-cols-1 gap-4 xl:grid-cols-[1.4fr_0.6fr]">
-          {/* Left: top pick */}
-          <div className="rounded-[2rem] border border-emerald-500/15 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.10),transparent_50%),rgba(9,9,11,0.8)] p-6 shadow-2xl shadow-black/30">
-            <div className="flex flex-wrap items-start justify-between gap-4 mb-5">
-              <div>
-                <p className="text-[9px] font-black uppercase tracking-[0.3em] text-emerald-400 mb-1 flex items-center gap-1.5">
-                  <Star size={9} className="fill-emerald-400" /> Top Opportunity
-                </p>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-3xl font-black text-white">{cleanSymbol(topPick.symbol)}</h3>
-                  <CagrBadge cagr={topPick.cagr} />
-                </div>
-                <p className="text-[11px] text-zinc-500 mt-0.5">{topPick.sector} · {topPick.industry}</p>
-              </div>
-              <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-5 py-3 text-right">
-                <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-emerald-400 mb-1">AI Prediction</p>
-                <p className="text-3xl font-black text-white">{topPick.finalPredictionScore.toFixed(1)}%</p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 mb-5">
-              {[
-                { label: 'CAGR',         value: `${topPick.cagr.toFixed(1)}%`,           color: topPick.cagr >= 20 ? 'text-emerald-400' : 'text-zinc-300' },
-                { label: 'Growth Ratio', value: `${topPick.growthRatio.toFixed(2)}x`,    color: topPick.growthRatio >= 5 ? 'text-emerald-400' : 'text-zinc-300' },
-                { label: 'Order Imbal.', value: `${topPick.orderImbalance.toFixed(2)}x`, color: topPick.orderImbalance >= 2.5 ? 'text-violet-400' : 'text-zinc-300' },
-                { label: 'RL Action',    value: topPick.rlAction,                         color: 'text-cyan-300' },
-              ].map(m => (
-                <div key={m.label} className="rounded-2xl border border-white/5 bg-black/20 p-3.5">
-                  <p className="text-[9px] uppercase tracking-[0.18em] text-zinc-500 mb-1.5">{m.label}</p>
-                  <p className={`text-xl font-black ${m.color}`}>{m.value}</p>
-                </div>
-              ))}
-            </div>
-
-            {/* Model score bars */}
-            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
-              {[
-                { label: 'Gradient Boost', value: topPick.gradientBoostProb,      color: 'bg-cyan-400',    text: 'text-cyan-300' },
-                { label: 'Final Signal',   value: topPick.finalPredictionScore,   color: 'bg-emerald-400', text: 'text-emerald-300' },
-                { label: 'Sentiment',      value: topPick.sentimentScore,         color: 'bg-amber-400',   text: 'text-amber-300' },
-              ].map(m => (
-                <div key={m.label} className="rounded-xl bg-white/[0.03] border border-white/5 px-3 py-2.5">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-[9px] uppercase tracking-[0.15em] text-zinc-500">{m.label}</span>
-                    <span className={`text-[11px] font-black ${m.text}`}>{m.value.toFixed(1)}%</span>
-                  </div>
-                  <ScoreBar value={m.value} color={m.color} />
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Right: risk + regime */}
-          <div className="space-y-4">
-            <div className="rounded-[2rem] border border-white/5 bg-zinc-950/70 p-5 shadow-2xl shadow-black/30">
-              <h3 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-white mb-4">
-                <Shield size={13} className="text-amber-300" /> Risk Engine
-              </h3>
-              <div className="space-y-3 text-[11px]">
-                {[
-                  { label: 'Drawdown Prob',   value: `${topPick.drawdownProbability.toFixed(1)}%`,  color: 'text-rose-400' },
-                  { label: 'Position Size',   value: `${topPick.positionSize.toFixed(0)} shares`,   color: 'text-emerald-400' },
-                  { label: 'Max Drawdown',    value: `${topPick.maxDrawdown.toFixed(1)}%`,           color: 'text-amber-400' },
-                  { label: 'POC / VAH / VAL', value: `${topPick.volumeProfile?.poc?.toFixed(0) ?? '--'} / ${topPick.volumeProfile?.vah?.toFixed(0) ?? '--'} / ${topPick.volumeProfile?.val?.toFixed(0) ?? '--'}`, color: 'text-zinc-300' },
-                ].map(m => (
-                  <div key={m.label} className="flex items-center justify-between border-b border-white/[0.04] pb-2 last:border-0 last:pb-0">
-                    <span className="text-zinc-500">{m.label}</span>
-                    <span className={`font-black ${m.color}`}>{m.value}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="rounded-[2rem] border border-white/5 bg-zinc-950/70 p-5 shadow-2xl shadow-black/30">
-              <h3 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-white mb-4">
-                <Brain size={13} className="text-violet-300" /> Market State
-              </h3>
-              <div className="space-y-2.5 text-[11px]">
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-500">Regime</span>
-                  <RegimePill regime={topPick.marketRegime} />
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-500">HMM State</span>
-                  <span className="font-black text-amber-300">{topPick.marketState}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-500">LSTM Next</span>
-                  <span className="font-black text-cyan-300">{topPick.lstmPredictedPrice.toFixed(2)}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* Hedge fund signals */}
-      <HedgeFundSignalRanking dashboard={dashboard?.hedgeFundSignals ?? null} />
-
-      {/* Main content grid */}
+      {/* ── 5. Main content: table + sidebar ── */}
       {!loading && results.length > 0 && (
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_300px] min-w-0 overflow-hidden">
-          <div className="min-w-0 overflow-hidden">
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1fr_300px]">
+
+          {/* Left: stock table */}
+          <div className="min-w-0 overflow-hidden space-y-5">
             <StockTable results={results} />
+
+            {/* Heatmap below table */}
+            <UltraQuantHeatmap stocks={results.slice(0, 24)} />
+
+            {/* Hedge fund signals */}
+            <HedgeFundSignalRanking dashboard={dashboard?.hedgeFundSignals ?? null} />
           </div>
 
           {/* Right sidebar */}
-          <div className="space-y-5 min-w-0">
-            {/* Sector rotation */}
-            <div className="rounded-[2rem] border border-white/5 bg-zinc-950/70 p-5 shadow-2xl shadow-black/30">
-              <h3 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-white mb-4">
-                <Waves size={13} className="text-emerald-300" /> Sector Rotation
-              </h3>
-              <div className="space-y-2.5">
-                {sectorRows.slice(0, 7).map((s, i) => {
-                  const maxScore = sectorRows[0]?.averageScore || 100;
-                  return (
-                    <div key={s.sector} className="rounded-xl border border-white/5 bg-black/20 p-3">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[9px] text-zinc-600 font-mono w-4">{i + 1}</span>
-                          <span className="text-[11px] font-black text-white">{s.sector}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-black text-emerald-400">{s.averageScore.toFixed(1)}</span>
-                          <span className="text-[9px] text-zinc-600">str {s.sectorStrength.toFixed(2)}</span>
-                        </div>
-                      </div>
-                      <ScoreBar value={s.averageScore} max={maxScore} color="bg-emerald-400" />
-                      <p className="text-[9px] text-zinc-600 mt-1.5 truncate">{s.leaders.slice(0, 3).map(cleanSymbol).join(' · ')}</p>
-                    </div>
-                  );
-                })}
+          <div className="space-y-4 min-w-0">
+            {/* Top pick card */}
+            {topPick && <TopPickCard stock={topPick} />}
+
+            {/* Score distribution */}
+            <div className="rounded-2xl border border-white/5 bg-black/25 px-4 py-3 space-y-2">
+              <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-500">Score Distribution</p>
+              <ScoreHistogram results={results} />
+              <div className="flex gap-1 mt-1">
+                {['0-20','20-40','40-60','60-80','80+'].map(l => (
+                  <span key={l} className="flex-1 text-center text-[7px] text-zinc-600">{l}</span>
+                ))}
               </div>
             </div>
 
+            {/* Sector rotation */}
+            <SectorPanel sectorRows={sectorRows} />
+
             {/* Alerts */}
-            <div className="rounded-[2rem] border border-white/5 bg-zinc-950/70 p-5 shadow-2xl shadow-black/30">
-              <h3 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-white mb-4">
-                <AlertTriangle size={13} className="text-rose-300" /> Live Alerts
-              </h3>
-              <div className="space-y-2">
-                {alerts.slice(0, 8).map((a, i) => (
-                  <div key={`${a.stockSymbol}-${i}`} className="rounded-xl border border-rose-500/10 bg-rose-500/[0.04] p-3">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-[11px] font-black text-white">{cleanSymbol(a.stockSymbol)}</span>
-                      <span className="text-[10px] font-black text-rose-300">{a.confidenceScore.toFixed(1)}%</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[9px] uppercase tracking-[0.12em] text-zinc-500 shrink-0">{a.signalType}</span>
-                      <ScoreBar value={a.confidenceScore} color="bg-rose-400" />
-                    </div>
-                  </div>
-                ))}
-                {alerts.length === 0 && <p className="text-[11px] text-zinc-600 text-center py-4">No active alerts</p>}
-              </div>
-            </div>
+            <AlertsPanel alerts={alerts} />
           </div>
         </div>
       )}
 
-      {/* Heatmap */}
-      {!loading && results.length > 0 && <UltraQuantHeatmap stocks={results.slice(0, 24)} />}
-
-      {/* Info cards */}
+      {/* ── 6. Info footer ── */}
       {!loading && (
-        <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
           {[
             { icon: Gauge,    color: 'text-amber-300',   title: 'Multibagger Engine',  body: 'Uses 5-year growth ratio, earnings expansion, revenue expansion, momentum persistence, and controlled drawdown to isolate 5x–10x long-duration growth candidates.' },
             { icon: Radar,    color: 'text-emerald-300', title: 'Market State Models', body: 'Regime detection tags trending, sideways, and high-volatility states while hidden state logic flags accumulation, distribution, breakout, and reversal behavior.' },
             { icon: Sparkles, color: 'text-cyan-300',    title: 'Signal Fusion',       body: 'Final score fuses gradient boost probability, LSTM trajectory, random-forest regime scoring, HMM state conviction, and sentiment into a single trading confidence output.' },
           ].map(c => (
-            <div key={c.title} className="rounded-[2rem] border border-white/5 bg-zinc-950/70 p-5 shadow-2xl shadow-black/30">
-              <h3 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-white mb-3">
-                <c.icon size={13} className={c.color} /> {c.title}
+            <div key={c.title} className="rounded-2xl border border-white/5 bg-zinc-950/60 p-4">
+              <h3 className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-white mb-2">
+                <c.icon size={12} className={c.color} /> {c.title}
               </h3>
-              <p className="text-[11px] leading-5 text-zinc-400">{c.body}</p>
+              <p className="text-[10px] leading-5 text-zinc-500">{c.body}</p>
             </div>
           ))}
-        </section>
+        </div>
       )}
     </div>
   );
