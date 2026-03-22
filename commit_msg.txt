@@ -1,1 +1,1 @@
-feat: rankings history tab with snapshot, sector breakdown, stock trend tracking + update index.html
+chore: add Niraj D Patil credit to footer

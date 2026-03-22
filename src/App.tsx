@@ -1022,6 +1022,7 @@ export default function App() {
             <span className="text-xs font-bold tracking-wide">StockPulse</span>
           </div>
           <p className="text-[10px] text-zinc-600">Powered by Upstox API &mdash; Data delayed 15 mins on free accounts</p>
+          <p className="text-[10px] text-zinc-500">Built by <span className="text-zinc-400 font-semibold">Niraj D Patil</span></p>
           <div className="flex gap-4 text-[10px] font-medium text-zinc-600">
             <a href="#" className="hover:text-zinc-300 transition-colors">Terms</a>
             <a href="#" className="hover:text-zinc-300 transition-colors">Privacy</a>
