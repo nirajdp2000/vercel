@@ -1,11 +1,1 @@
-ui: redesign UltraQuant tab for better UX
-
-- Cleaner ScanHeader with inline status dot and collapsible advanced filters
-- KPI strip as 6-column grid with sub-labels (replaces mixed StatCard+histogram row)
-- TopPickCard in right sidebar with score ring, model bars, key metrics grid
-- Score distribution histogram moved to sidebar below top pick
-- SectorPanel and AlertsPanel extracted as clean sidebar components
-- StockTable: expand chevron indicator, thinner score bars, better signal tab styles
-- Main layout: table + heatmap + hedge fund signals on left; sidebar on right
-- Info footer cards at bottom, smaller and less intrusive
-- All functionality preserved (filters, sort, expand, signal filter, scan)
+ui: factor breakdown and sector strength beside narrow rankings table

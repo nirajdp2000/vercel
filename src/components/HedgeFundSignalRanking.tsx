@@ -80,129 +80,135 @@ export function HedgeFundSignalRanking({ dashboard }: { dashboard?: HedgeFundSig
         </div>
       </div>
 
-      {/* ── Full-width rankings table ── */}
-      <div className="rounded-[1.5rem] border border-white/5 bg-zinc-950/75 overflow-hidden">
-        <div className="flex items-center justify-between border-b border-white/5 px-5 py-3">
-          <h4 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-white">
-            <TrendingUp className="h-3.5 w-3.5 text-emerald-300" /> Top {rankings.length} Stocks
-          </h4>
-          <span className="text-[10px] text-zinc-500">Click a row to inspect factors</span>
-        </div>
-        {/* Scrollable table — no height cap, scrolls the whole page naturally */}
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[560px] text-left">
-            <thead className="bg-zinc-950/90 text-[9px] font-bold uppercase tracking-[0.15em] text-zinc-500 border-b border-white/5">
-              <tr>
-                <th className="px-4 py-3 w-12">#</th>
-                <th className="px-4 py-3">Stock</th>
-                <th className="px-3 py-3 text-right">Mom</th>
-                <th className="px-3 py-3 text-right">Trend</th>
-                <th className="px-3 py-3 text-right">Vol</th>
-                <th className="px-3 py-3 text-right">Sector</th>
-                <th className="px-3 py-3 text-right">Breakout</th>
-                <th className="px-4 py-3 text-right">Final</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/[0.04]">
-              {rankings.map(signal => {
-                const isSel = signal.stockSymbol === selected.stockSymbol;
-                return (
-                  <tr key={signal.stockSymbol} onClick={() => setSelectedSymbol(signal.stockSymbol)}
-                    className={`cursor-pointer transition-colors ${isSel ? 'bg-emerald-400/[0.07]' : 'hover:bg-white/[0.025]'}`}>
-                    <td className="px-4 py-2.5 text-[11px] font-black text-zinc-500">#{signal.rank}</td>
-                    <td className="px-4 py-2.5">
-                      <div className="text-[12px] font-bold text-white">{cleanSymbol(signal.stockSymbol)}</div>
-                      <div className="text-[9px] uppercase tracking-[0.12em] text-zinc-500">{signal.sector}</div>
-                    </td>
-                    <td className={`px-3 py-2.5 text-[11px] font-bold text-right ${scoreTone(signal.momentumScore)}`}>{signal.momentumScore.toFixed(1)}</td>
-                    <td className={`px-3 py-2.5 text-[11px] font-bold text-right ${scoreTone(signal.trendScore)}`}>{signal.trendScore.toFixed(1)}</td>
-                    <td className={`px-3 py-2.5 text-[11px] font-bold text-right ${scoreTone(signal.volumeScore)}`}>{signal.volumeScore.toFixed(1)}</td>
-                    <td className={`px-3 py-2.5 text-[11px] font-bold text-right ${scoreTone(signal.sectorScore)}`}>{signal.sectorScore.toFixed(1)}</td>
-                    <td className={`px-3 py-2.5 text-[11px] font-bold text-right ${scoreTone(signal.breakoutScore)}`}>{signal.breakoutScore.toFixed(1)}</td>
-                    <td className="px-4 py-2.5 text-[13px] font-black text-right text-emerald-300">{signal.finalScore.toFixed(1)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      {/* ── Table + right panel side by side ── */}
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1fr_300px]">
 
-      {/* ── Factor breakdown + Sector strength side by side ── */}
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+        {/* Narrow rankings table */}
+        <div className="rounded-[1.5rem] border border-white/5 bg-zinc-950/75 overflow-hidden min-w-0">
+          <div className="flex items-center justify-between border-b border-white/5 px-4 py-3">
+            <h4 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-white">
+              <TrendingUp className="h-3.5 w-3.5 text-emerald-300" /> Top {rankings.length} Stocks
+            </h4>
+            <span className="text-[9px] text-zinc-500">Click row → inspect factors</span>
+          </div>
+          <div className="overflow-x-auto max-h-[520px] overflow-y-auto">
+            <table className="w-full min-w-[420px] text-left">
+              <thead className="sticky top-0 bg-zinc-950/98 text-[8px] font-bold uppercase tracking-[0.15em] text-zinc-500 border-b border-white/5">
+                <tr>
+                  <th className="px-3 py-2.5 w-8">#</th>
+                  <th className="px-3 py-2.5">Stock</th>
+                  <th className="px-2 py-2.5 text-right">Mom</th>
+                  <th className="px-2 py-2.5 text-right">Trend</th>
+                  <th className="px-2 py-2.5 text-right">Vol</th>
+                  <th className="px-2 py-2.5 text-right">Brk</th>
+                  <th className="px-3 py-2.5 text-right">Final</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/[0.04]">
+                {rankings.map(signal => {
+                  const isSel = signal.stockSymbol === selected.stockSymbol;
+                  return (
+                    <tr key={signal.stockSymbol} onClick={() => setSelectedSymbol(signal.stockSymbol)}
+                      className={`cursor-pointer transition-colors ${isSel ? 'bg-emerald-400/[0.07]' : 'hover:bg-white/[0.025]'}`}>
+                      <td className="px-3 py-2 text-[10px] font-black text-zinc-600">{signal.rank}</td>
+                      <td className="px-3 py-2">
+                        <div className="text-[11px] font-bold text-white leading-tight">{cleanSymbol(signal.stockSymbol)}</div>
+                        <div className="text-[8px] uppercase tracking-[0.1em] text-zinc-500">{signal.sector}</div>
+                      </td>
+                      <td className={`px-2 py-2 text-[10px] font-bold text-right ${scoreTone(signal.momentumScore)}`}>{signal.momentumScore.toFixed(0)}</td>
+                      <td className={`px-2 py-2 text-[10px] font-bold text-right ${scoreTone(signal.trendScore)}`}>{signal.trendScore.toFixed(0)}</td>
+                      <td className={`px-2 py-2 text-[10px] font-bold text-right ${scoreTone(signal.volumeScore)}`}>{signal.volumeScore.toFixed(0)}</td>
+                      <td className={`px-2 py-2 text-[10px] font-bold text-right ${scoreTone(signal.breakoutScore)}`}>{signal.breakoutScore.toFixed(0)}</td>
+                      <td className="px-3 py-2 text-[12px] font-black text-right text-emerald-300">{signal.finalScore.toFixed(1)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
 
-        {/* Factor breakdown */}
-        <div className="rounded-[1.5rem] border border-white/5 bg-zinc-950/75 p-5">
-          <h4 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-white mb-4">
-            <Radar className="h-3.5 w-3.5 text-cyan-300" /> Factor Breakdown
-          </h4>
-          <div className="rounded-2xl border border-white/5 bg-black/20 p-4">
-            <div className="flex items-center justify-between mb-4">
+        {/* Right panel: Factor Breakdown + Sector Strength stacked */}
+        <div className="space-y-4 min-w-0">
+
+          {/* Factor Breakdown */}
+          <div className="rounded-[1.5rem] border border-white/5 bg-zinc-950/75 p-4">
+            <h4 className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-white mb-3">
+              <Radar className="h-3 w-3 text-cyan-300" /> Factor Breakdown
+            </h4>
+            {/* Selected stock header */}
+            <div className="flex items-center justify-between mb-3 rounded-xl border border-white/5 bg-black/20 px-3 py-2.5">
               <div>
-                <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-zinc-500">Selected</p>
-                <h5 className="text-xl font-black text-white mt-1">{cleanSymbol(selected.stockSymbol)}</h5>
-                <p className="text-[11px] text-zinc-400">{selected.sector}</p>
+                <p className="text-[8px] text-zinc-500 uppercase tracking-[0.15em]">Selected</p>
+                <p className="text-[14px] font-black text-white leading-tight">{cleanSymbol(selected.stockSymbol)}</p>
+                <p className="text-[9px] text-zinc-500">{selected.sector}</p>
               </div>
-              <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-right">
-                <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-emerald-300">Final</p>
-                <p className="text-2xl font-black text-white">{selected.finalScore.toFixed(1)}</p>
+              <div className="text-right">
+                <p className="text-[8px] text-emerald-400 uppercase tracking-[0.15em]">Final</p>
+                <p className="text-[22px] font-black text-white leading-none">{selected.finalScore.toFixed(1)}</p>
               </div>
             </div>
-            <div className="space-y-2.5">
+            {/* Factor bars */}
+            <div className="space-y-2">
               {([
-                ['Momentum',    selected.momentumScore],
-                ['Trend',       selected.trendScore],
-                ['Volume',      selected.volumeScore],
-                ['Volatility',  selected.volatilityScore],
-                ['Sector',      selected.sectorScore],
+                ['Momentum',      selected.momentumScore],
+                ['Trend',         selected.trendScore],
+                ['Volume',        selected.volumeScore],
+                ['Volatility',    selected.volatilityScore],
+                ['Sector',        selected.sectorScore],
                 ['Institutional', selected.institutionalScore],
-                ['Breakout',    selected.breakoutScore],
+                ['Breakout',      selected.breakoutScore],
               ] as [string, number][]).map(([label, score]) => (
                 <div key={label}>
-                  <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.15em] text-zinc-500 mb-1">
+                  <div className="flex items-center justify-between text-[9px] uppercase tracking-[0.12em] text-zinc-500 mb-0.5">
                     <span>{label}</span>
-                    <span className="font-bold text-white">{score.toFixed(1)}</span>
+                    <span className={`font-black ${scoreTone(score)}`}>{score.toFixed(1)}</span>
                   </div>
-                  <div className="h-1.5 rounded-full bg-white/5 overflow-hidden">
-                    <div className={`${barColor(score)} h-full rounded-full`} style={{ width: `${Math.min(score, 100)}%` }} />
+                  <div className="h-1 rounded-full bg-white/5 overflow-hidden">
+                    <div className={`${barColor(score)} h-full rounded-full transition-all duration-500`} style={{ width: `${Math.min(score, 100)}%` }} />
                   </div>
                 </div>
               ))}
             </div>
-            <div className="grid grid-cols-2 gap-3 mt-4">
-              <div className="rounded-xl border border-white/5 bg-black/25 p-3">
-                <p className="text-[9px] font-bold uppercase tracking-[0.15em] text-zinc-500">3M Momentum</p>
-                <p className="mt-1.5 font-black text-cyan-300">{selected.momentumValue.toFixed(2)}x</p>
+            {/* Extra metrics */}
+            <div className="grid grid-cols-2 gap-2 mt-3">
+              <div className="rounded-lg border border-white/5 bg-black/25 px-2.5 py-2">
+                <p className="text-[8px] text-zinc-500 uppercase tracking-[0.12em]">3M Mom</p>
+                <p className="font-black text-cyan-300 text-[11px] mt-0.5">{selected.momentumValue.toFixed(2)}x</p>
               </div>
-              <div className="rounded-xl border border-white/5 bg-black/25 p-3">
-                <p className="text-[9px] font-bold uppercase tracking-[0.15em] text-zinc-500">Order Imbalance</p>
-                <p className="mt-1.5 font-black text-emerald-300">{selected.orderImbalance.toFixed(2)}x</p>
+              <div className="rounded-lg border border-white/5 bg-black/25 px-2.5 py-2">
+                <p className="text-[8px] text-zinc-500 uppercase tracking-[0.12em]">Order Imbal.</p>
+                <p className="font-black text-emerald-300 text-[11px] mt-0.5">{selected.orderImbalance.toFixed(2)}x</p>
               </div>
             </div>
           </div>
-        </div>
 
-        {/* Sector strength */}
-        <div className="rounded-[1.5rem] border border-white/5 bg-zinc-950/75 p-5">
-          <h4 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-white mb-4">
-            <Building2 className="h-3.5 w-3.5 text-amber-300" /> Sector Strength
-          </h4>
-          <div className="space-y-2.5">
-            {sectorStrength.slice(0, 7).map(s => (
-              <div key={s.sector} className="rounded-xl border border-white/5 bg-black/20 p-3">
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-[12px] font-bold text-white">{s.sector}</span>
-                  <span className={`text-[12px] font-black ${scoreTone(s.sectorScore)}`}>{s.sectorScore.toFixed(1)}</span>
+          {/* Sector Strength */}
+          <div className="rounded-[1.5rem] border border-white/5 bg-zinc-950/75 p-4">
+            <h4 className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-white mb-3">
+              <Building2 className="h-3 w-3 text-amber-300" /> Sector Strength
+            </h4>
+            <div className="space-y-2">
+              {sectorStrength.slice(0, 7).map((s, i) => (
+                <div key={s.sector} className="rounded-xl border border-white/5 bg-black/20 px-3 py-2.5">
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[8px] text-zinc-600 font-mono">{i + 1}</span>
+                      <span className="text-[11px] font-bold text-white">{s.sector}</span>
+                    </div>
+                    <span className={`text-[11px] font-black ${scoreTone(s.sectorScore)}`}>{s.sectorScore.toFixed(1)}</span>
+                  </div>
+                  <div className="h-1 rounded-full bg-white/5 overflow-hidden mb-1">
+                    <div className={`${barColor(s.sectorScore)} h-full rounded-full`} style={{ width: `${Math.min(s.sectorScore, 100)}%` }} />
+                  </div>
+                  <p className="text-[8px] text-zinc-600 truncate">
+                    {s.averageReturn.toFixed(1)}% avg · {s.leaders.slice(0, 2).map(cleanSymbol).join(', ')}
+                  </p>
                 </div>
-                <div className="h-1.5 rounded-full bg-white/5 overflow-hidden mb-1.5">
-                  <div className={`${barColor(s.sectorScore)} h-full rounded-full`} style={{ width: `${Math.min(s.sectorScore, 100)}%` }} />
-                </div>
-                <p className="text-[9px] uppercase tracking-[0.12em] text-zinc-500">
-                  Avg {s.averageReturn.toFixed(1)}% · {s.leaders.slice(0, 3).map(cleanSymbol).join(', ')}
-                </p>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
+
         </div>
       </div>
 
