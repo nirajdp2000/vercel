@@ -808,7 +808,7 @@ export default function App() {
       </div>
 
       {/* Header */}
-      <header className="sticky top-0 z-50 border-b border-white/[0.06] bg-[#0a0a0c]/80 backdrop-blur-2xl shadow-[0_8px_40px_rgba(0,0,0,0.7)] scan-line-container">
+      <header className="sticky top-0 z-50 border-b border-white/[0.06] bg-[#0a0a0c]/80 backdrop-blur-2xl shadow-[0_8px_40px_rgba(0,0,0,0.7)]">
         {/* subtle top glow line */}
         <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-indigo-500/50 to-transparent" />
 
