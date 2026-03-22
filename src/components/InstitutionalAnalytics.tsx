@@ -335,7 +335,7 @@ export const InstitutionalAnalytics: React.FC<InstitutionalAnalyticsProps> = ({
     };
 
     loadOrderFlow();
-    const intervalId = window.setInterval(loadOrderFlow, 8000);
+    const intervalId = window.setInterval(loadOrderFlow, 30000);
     return () => {
       active = false;
       window.clearInterval(intervalId);

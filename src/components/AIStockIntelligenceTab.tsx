@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchJson } from '../lib/api';
 import {
   Activity, AlertTriangle, BarChart2, Brain, ChevronUp, ChevronDown,
@@ -298,13 +298,14 @@ function RankingsTable({ data }: { data: StockIntelligenceResult[] }) {
     else { setSortKey(key); setSortDir('desc'); }
   };
 
-  const filtered = [...data]
+  const filtered = useMemo(() => [...data]
     .filter(r => !filter || r.symbol.includes(filter.toUpperCase()) || r.sector.toLowerCase().includes(filter.toLowerCase()))
     .filter(r => signalFilter === 'ALL' || r.signal === signalFilter)
     .sort((a, b) => {
       const av = Number(a[sortKey]), bv = Number(b[sortKey]);
       return sortDir === 'desc' ? bv - av : av - bv;
-    });
+    }),
+  [data, filter, signalFilter, sortKey, sortDir]);
 
   const displayed = showAll ? filtered : filtered.slice(0, PAGE);
 
