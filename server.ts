@@ -652,14 +652,20 @@ setFallbackUniverse(NSE_STOCK_UNIVERSE.map(s => ({
   instrumentKey: `NSE_EQ|${s.symbol}`,
 })));
 
-const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> =>
-  (await getUniverseAsync()).map(s => ({
+const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
+  // Use the curated NSE_STOCK_UNIVERSE for all scoring/ranking engines.
+  // This universe has verified sector, industry, marketCap, and averageVolume data.
+  // The Supabase universe (5221 stocks) is used only for search/autocomplete — it
+  // contains many micro-cap BSE stocks with undefined marketCap and wrong sectors
+  // which would pollute the rankings with unknown stocks.
+  return NSE_STOCK_UNIVERSE.map(s => ({
     symbol:        s.symbol,
     sector:        s.sector,
     industry:      s.industry,
     marketCap:     s.marketCap,
     averageVolume: s.averageVolume,
   }));
+};
 
 
   const buildReturns = (prices: number[]) => {
@@ -3460,13 +3466,23 @@ Respond ONLY with this JSON structure (fill every field):
   /**
    * Build a live macro regime context from the real-time macroSnapshot.
    * This drives sector multipliers, geopolitical risk, and adaptive signal thresholds.
+   *
+   * Geo-risk model:
+   *   - VIX stress: primary fear gauge (global wars, crises)
+   *   - Crude stress: supply shock proxy (Middle East conflict, sanctions)
+   *   - Rupee stress: capital flight proxy (India-specific risk)
+   *   - News-based: scans recent news headlines for war/disaster/fraud keywords
+   *
+   * VIX calibration for Indian markets:
+   *   CBOE VIX 25-30 = elevated but not crisis for India (India VIX typically 12-20)
+   *   True crisis for India = CBOE VIX > 35 (COVID, GFC levels)
    */
   const buildMacroRegimeContext = async () => {
     const snap = await buildLiveMacroSnapshot();
 
     // ── Parse live values ──────────────────────────────────────────────────
-    const crudeRaw  = parseFloat((snap.crudePriceUSD?.value ?? "$82").replace(/[^0-9.]/g, ""));
-    const usdinrRaw = parseFloat((snap.usdinr?.value ?? "₹83").replace(/[^0-9.]/g, ""));
+    const crudeRaw  = parseFloat((snap.crudePriceUSD?.value ?? "82").replace(/[^0-9.]/g, ""));
+    const usdinrRaw = parseFloat((snap.usdinr?.value ?? "83").replace(/[^0-9.]/g, ""));
     const vixRaw    = parseFloat(snap.globalSentiment?.vix ?? "18");
     const niftyVal  = snap.nifty50Trend?.value ?? "Sideways";
     const repoRaw   = parseFloat((snap.repoRate?.value ?? "6.5").replace(/[^0-9.]/g, ""));
@@ -3474,9 +3490,11 @@ Respond ONLY with this JSON structure (fill every field):
     const fiiTrend  = snap.fiiFlow?.trend ?? "NEUTRAL";
 
     // ── Market regime classification ───────────────────────────────────────
-    // VIX: <15 = calm, 15-20 = cautious, 20-25 = risk-off, >25 = fear/crisis
+    // Calibrated for Indian market context:
+    // CBOE VIX <15 = calm, 15-20 = cautious, 20-28 = risk-off, >28 = fear
+    // (India VIX typically runs 12-20; CBOE VIX 25-28 = risk-off, not crisis)
     const vixRegime: "CALM" | "CAUTIOUS" | "RISK_OFF" | "FEAR" =
-      vixRaw < 15 ? "CALM" : vixRaw < 20 ? "CAUTIOUS" : vixRaw < 25 ? "RISK_OFF" : "FEAR";
+      vixRaw < 15 ? "CALM" : vixRaw < 20 ? "CAUTIOUS" : vixRaw < 28 ? "RISK_OFF" : "FEAR";
 
     // Nifty trend
     const niftyBullish = niftyVal.toLowerCase().includes("bull");
@@ -3502,36 +3520,51 @@ Respond ONLY with this JSON structure (fill every field):
     marketBiasScore = Math.min(1, Math.max(0, marketBiasScore));
 
     // ── Geopolitical / event risk ──────────────────────────────────────────
-    // Derived from VIX (global fear gauge) + crude spike (war/supply shock proxy)
-    // High VIX + high crude = likely geopolitical stress
-    const crudeStress = crudeRaw > 95 ? 0.3 : crudeRaw > 85 ? 0.15 : 0;
-    const vixStress   = vixRaw > 25 ? 0.35 : vixRaw > 20 ? 0.20 : vixRaw > 15 ? 0.08 : 0;
-    const geoRisk     = Math.min(1, crudeStress + vixStress); // 0 = no risk, 1 = extreme
+    // Multi-signal geo-risk model:
+    //   1. VIX stress: global fear gauge (wars, crises, pandemics)
+    //   2. Crude stress: supply shock proxy (Middle East, Russia-Ukraine, sanctions)
+    //   3. Rupee stress: capital flight / India-specific risk
+    //   4. News-based: scan recent headlines for geo-risk keywords
+    const crudeStress = crudeRaw > 100 ? 0.30 : crudeRaw > 90 ? 0.18 : crudeRaw > 82 ? 0.08 : 0;
+    const vixStress   = vixRaw > 35 ? 0.40 : vixRaw > 28 ? 0.25 : vixRaw > 22 ? 0.15 : vixRaw > 18 ? 0.08 : 0;
+    const rupeeStress = usdinrRaw > 88 ? 0.12 : usdinrRaw > 86 ? 0.06 : 0;
+
+    // News-based geo-risk: scan recent news for war/disaster/fraud keywords
+    // Uses the live news feed if available (from NewsIntelligenceService)
+    const recentNews = getTopNews(20);
+    const geoKeywords = ['war', 'conflict', 'attack', 'missile', 'bomb', 'sanction', 'invasion',
+      'earthquake', 'flood', 'cyclone', 'disaster', 'tsunami', 'pandemic', 'outbreak',
+      'fraud', 'scam', 'default', 'bankruptcy', 'crisis', 'collapse', 'terror'];
+    const newsGeoRisk = recentNews.reduce((risk, item) => {
+      const text = (item.title + ' ' + (item.summary ?? '')).toLowerCase();
+      const hits = geoKeywords.filter(kw => text.includes(kw)).length;
+      return risk + Math.min(0.05, hits * 0.02); // max 0.05 per article
+    }, 0);
+
+    const geoRisk = Math.min(1, crudeStress + vixStress + rupeeStress + Math.min(0.15, newsGeoRisk));
 
     // ── Sector macro sensitivity multipliers ──────────────────────────────
-    // Each sector's macro score is adjusted based on live macro conditions
-    // Crude: high crude hurts Consumer/Industrials, helps Energy
-    // USDINR: weak rupee (high USDINR) hurts importers (Consumer, Tech hardware), helps IT exporters
-    // Rates: falling rates help Financials, Real Estate, Consumer
-    // VIX: high VIX hurts all but especially small-cap/speculative
     const crudeHigh  = crudeRaw > 90;
     const rupeWeak   = usdinrRaw > 86;
     const ratesFall  = snap.repoRate?.trend === "FALLING";
     const ratesRise  = snap.repoRate?.trend === "RISING";
 
     const sectorMacroMultiplier: Record<string, number> = {
-      Technology:  0.68 + (rupeWeak ? 0.08 : 0) + (vixRegime === "CALM" ? 0.05 : -0.03),
-      Financials:  0.65 + (ratesFall ? 0.10 : ratesRise ? -0.08 : 0) + (fiiBullish ? 0.06 : 0),
-      Energy:      0.58 + (crudeHigh ? 0.12 : -0.05) + (geoRisk > 0.2 ? 0.05 : 0),
-      Healthcare:  0.70 + (geoRisk > 0.3 ? 0.05 : 0) + (vixRegime === "FEAR" ? 0.08 : 0), // defensive
-      Consumer:    0.62 + (crudeHigh ? -0.08 : 0.04) + (ratesFall ? 0.05 : 0) + (inflRaw > 5.5 ? -0.06 : 0),
-      Industrials: 0.60 + (crudeHigh ? -0.06 : 0.03) + (geoRisk > 0.3 ? -0.05 : 0),
-      Telecom:     0.55 + (ratesFall ? 0.04 : 0) + (vixRegime === "CALM" ? 0.03 : 0),
-      Materials:   0.52 + (crudeHigh ? 0.04 : 0) + (geoRisk > 0.2 ? 0.03 : 0),
+      Technology:   0.68 + (rupeWeak ? 0.08 : 0) + (vixRegime === "CALM" ? 0.05 : -0.02),
+      Financials:   0.65 + (ratesFall ? 0.10 : ratesRise ? -0.08 : 0) + (fiiBullish ? 0.06 : 0),
+      Energy:       0.58 + (crudeHigh ? 0.12 : -0.05) + (geoRisk > 0.2 ? 0.05 : 0),
+      Healthcare:   0.70 + (geoRisk > 0.3 ? 0.05 : 0) + (vixRegime === "FEAR" ? 0.08 : 0),
+      Consumer:     0.62 + (crudeHigh ? -0.08 : 0.04) + (ratesFall ? 0.05 : 0) + (inflRaw > 5.5 ? -0.06 : 0),
+      Industrials:  0.60 + (crudeHigh ? -0.06 : 0.03) + (geoRisk > 0.3 ? -0.05 : 0),
+      Telecom:      0.55 + (ratesFall ? 0.04 : 0) + (vixRegime === "CALM" ? 0.03 : 0),
+      Materials:    0.52 + (crudeHigh ? 0.04 : 0) + (geoRisk > 0.2 ? 0.03 : 0),
+      "Real Estate": 0.55 + (ratesFall ? 0.12 : ratesRise ? -0.10 : 0) + (fiiBullish ? 0.04 : 0),
+      Utilities:    0.60 + (geoRisk > 0.3 ? 0.06 : 0) + (vixRegime === "FEAR" ? 0.05 : 0), // defensive
+      Auto:         0.58 + (crudeHigh ? -0.05 : 0.03) + (inflRaw < 4.5 ? 0.04 : 0),
+      Diversified:  0.50,
     };
 
     // ── Adaptive signal thresholds ─────────────────────────────────────────
-    // In fear/risk-off regimes, raise the bar for STRONG BUY; in calm/bull, lower it
     const regimePenalty = vixRegime === "FEAR" ? 0.08 : vixRegime === "RISK_OFF" ? 0.04 : 0;
     const regimeBonus   = vixRegime === "CALM" && niftyBullish ? 0.04 : 0;
     const strongBuyThreshold = 0.72 + regimePenalty - regimeBonus;
@@ -3539,21 +3572,23 @@ Respond ONLY with this JSON structure (fill every field):
     const holdThreshold       = 0.38;
 
     // ── Time horizon context ───────────────────────────────────────────────
-    // Short-term (1-5 days): momentum, rally, volume spike matter more
-    // Long-term (1-3 months): quant fundamentals, macro, institutional flow matter more
-    const shortTermBias = vixRegime === "CALM" ? 0.55 : 0.45; // calm = more short-term trades
+    const shortTermBias = vixRegime === "CALM" ? 0.55 : 0.45;
     const longTermBias  = 1 - shortTermBias;
+
+    // ── Regime summary (human-readable) ───────────────────────────────────
+    const regimeSummary =
+      vixRegime === "FEAR"     ? "Crisis/Fear — raise cash, defensive only"
+      : vixRegime === "RISK_OFF" ? "Risk-Off — selective, quality stocks only"
+      : vixRegime === "CAUTIOUS" ? "Cautious — moderate exposure, watch macro"
+      : niftyBullish             ? "Bull Market — broad participation"
+      : "Neutral — stock-specific opportunities";
 
     return {
       vixRegime, vixRaw, marketBiasScore, geoRisk,
       sectorMacroMultiplier, strongBuyThreshold, buyThreshold, holdThreshold,
       shortTermBias, longTermBias, fiiBullish, fiiBearish,
       niftyBullish, niftyBearish, crudeHigh, rupeWeak, ratesFall,
-      regimeSummary: vixRegime === "FEAR" ? "Crisis/Fear — raise cash, defensive only"
-        : vixRegime === "RISK_OFF" ? "Risk-Off — selective, quality stocks only"
-        : vixRegime === "CAUTIOUS" ? "Cautious — moderate exposure, watch macro"
-        : niftyBullish ? "Bull Market — broad participation"
-        : "Neutral — stock-specific opportunities",
+      regimeSummary,
     };
   };
 
@@ -3804,7 +3839,26 @@ Respond ONLY with this JSON structure (fill every field):
         quantFilterScore: +quantScore.toFixed(2), socialSentimentScore: +socialScore.toFixed(2),
         newsSentimentScore: +newsScore.toFixed(2), newsImpactScore: +newsImpact.toFixed(2),
         macroScore: +macroScore.toFixed(2),
-        sectorImpact: { Technology: "Positive — rate stability, IT exports", Financials: "Positive — credit growth", Energy: "Neutral — crude stable", Healthcare: "Positive — export demand", Consumer: "Positive — rural recovery" }[profile.sector] ?? "Neutral",
+        sectorImpact: (() => {
+          // Dynamic sector impact based on live macro conditions
+          const mult = macroCtx?.sectorMacroMultiplier[profile.sector] ?? 0.50;
+          const label = mult > 0.70 ? "Positive" : mult > 0.60 ? "Moderate" : mult > 0.50 ? "Neutral" : "Negative";
+          const reasons: Record<string, string> = {
+            Technology:   macroCtx?.rupeWeak ? "Positive — weak rupee boosts IT exports" : "Neutral — IT sector stable",
+            Financials:   macroCtx?.ratesFall ? "Positive — rate cuts boost credit growth" : "Neutral — credit growth steady",
+            Energy:       macroCtx?.crudeHigh ? "Positive — high crude benefits upstream" : "Neutral — crude stable",
+            Healthcare:   "Positive — defensive sector, export demand strong",
+            Consumer:     macroCtx?.crudeHigh ? "Negative — high crude hurts margins" : "Positive — rural recovery",
+            Industrials:  macroCtx?.geoRisk > 0.3 ? "Cautious — geo-risk weighs on capex" : "Positive — infra spending",
+            Telecom:      macroCtx?.ratesFall ? "Positive — rate cuts reduce debt burden" : "Neutral — ARPU growth",
+            Materials:    macroCtx?.crudeHigh ? "Positive — commodity cycle up" : "Neutral — demand steady",
+            "Real Estate": macroCtx?.ratesFall ? "Positive — rate cuts boost housing demand" : "Neutral — demand stable",
+            Utilities:    "Positive — defensive, stable cash flows",
+            Auto:         macroCtx?.crudeHigh ? "Cautious — high fuel costs weigh on demand" : "Positive — EV transition",
+            Diversified:  "Neutral",
+          };
+          return reasons[profile.sector] ?? `${label} — macro conditions ${mult > 0.60 ? 'supportive' : 'mixed'}`;
+        })(),
         orderImbalance: +orderImbalance.toFixed(2), institutionalSignal,
         institutionalScore: +instScore.toFixed(2), aiPredictionScore: +aiScore.toFixed(2),
         marketRegime: regime, rlAction, finalScore: +finalScore.toFixed(2),
@@ -3832,17 +3886,33 @@ Respond ONLY with this JSON structure (fill every field):
       .sort((a, b) => b.finalScore - a.finalScore)
       .map((r, i) => ({ ...r, rank: i + 1 }));
 
-    // Percentile-based signal assignment with macro-regime adaptive thresholds
-    // In fear/risk-off: fewer STRONG BUY (higher bar), more SELL
-    // In calm/bull: more STRONG BUY, fewer SELL
-    // Guarantees all 4 signals always appear
-    const n = ranked.length;
-    // Regime-adjusted percentile cutoffs
+    // ── Signal assignment: applied to top 50 slice ─────────────────────────
+    // We assign signals within the top 50 so all 4 signal types always appear.
+    // This gives users a meaningful distribution: best stocks = STRONG BUY,
+    // weakest of the top 50 = SELL (relative to the top 50, not the full universe).
+    //
+    // Regime-adaptive percentages within top 50:
+    //   FEAR:     10% SB / 25% BUY / 35% HOLD / 30% SELL  (very selective)
+    //   RISK_OFF: 15% SB / 30% BUY / 35% HOLD / 20% SELL  (selective)
+    //   CAUTIOUS: 18% SB / 34% BUY / 30% HOLD / 18% SELL  (moderate)
+    //   CALM+BULL:20% SB / 35% BUY / 30% HOLD / 15% SELL  (broad participation)
     const vixR = macroCtx?.vixRegime ?? "CAUTIOUS";
+    const top50Slice = ranked.slice(0, 50);
+    const n50 = top50Slice.length;
+
+    const sb50Pct   = vixR === "FEAR" ? 0.10 : vixR === "RISK_OFF" ? 0.15 : vixR === "CALM" && macroCtx?.niftyBullish ? 0.20 : 0.18;
+    const buy50Pct  = vixR === "FEAR" ? 0.25 : vixR === "RISK_OFF" ? 0.30 : vixR === "CALM" ? 0.35 : 0.34;
+    const hold50Pct = vixR === "FEAR" ? 0.35 : vixR === "RISK_OFF" ? 0.35 : 0.30;
+
+    const sb50Cut   = Math.max(1, Math.round(n50 * sb50Pct));
+    const buy50Cut  = Math.max(sb50Cut + 1, Math.round(n50 * (sb50Pct + buy50Pct)));
+    const hold50Cut = Math.max(buy50Cut + 1, Math.round(n50 * (sb50Pct + buy50Pct + hold50Pct)));
+
+    // Also compute full-universe percentile cutoffs for summary counts
+    const n = ranked.length;
     const strongBuyPct = vixR === "FEAR" ? 0.05 : vixR === "RISK_OFF" ? 0.07 : vixR === "CALM" && macroCtx?.niftyBullish ? 0.13 : 0.10;
     const buyPct       = vixR === "FEAR" ? 0.25 : vixR === "RISK_OFF" ? 0.30 : vixR === "CALM" ? 0.45 : 0.40;
     const holdPct      = vixR === "FEAR" ? 0.55 : vixR === "RISK_OFF" ? 0.65 : 0.75;
-
     const strongBuyCutoff = Math.max(1, Math.floor(n * strongBuyPct));
     const buyCutoff       = Math.max(strongBuyCutoff + 1, Math.floor(n * buyPct));
     const holdCutoff      = Math.max(buyCutoff + 1, Math.floor(n * holdPct));
@@ -3857,6 +3927,27 @@ Respond ONLY with this JSON structure (fill every field):
       return "Medium-Term (1-4 weeks)";
     };
 
+    // Assign signals to top 50 (relative ranking within top 50)
+    const top50WithSignals = top50Slice.map((r, i) => {
+      const signal =
+        i < sb50Cut   ? "STRONG BUY"
+        : i < buy50Cut  ? "BUY"
+        : i < hold50Cut ? "HOLD"
+        : "SELL";
+      const confidence =
+        i < sb50Cut   ? "HIGH"
+        : i < buy50Cut  ? "HIGH"
+        : i < hold50Cut ? "MEDIUM"
+        : "LOW";
+      return {
+        ...r, signal, confidence,
+        timeHorizon: timeHorizon(r, i),
+        macroRegime: macroCtx?.regimeSummary ?? "Neutral",
+        geoRiskLevel: macroCtx ? (macroCtx.geoRisk > 0.4 ? "HIGH" : macroCtx.geoRisk > 0.2 ? "MEDIUM" : "LOW") : "LOW",
+      };
+    });
+
+    // Assign signals to full universe (for summary counts and alerts)
     const rankedWithSignals = ranked.map((r, i) => {
       const signal =
         i < strongBuyCutoff ? "STRONG BUY"
@@ -3876,8 +3967,8 @@ Respond ONLY with this JSON structure (fill every field):
       };
     });
 
-    // rankings: all stocks (frontend filters by signal client-side)
-    const top50 = rankedWithSignals.slice(0, 50);
+    // rankings: top 50 with signals assigned within the top 50 (all 4 signal types guaranteed)
+    const top50 = top50WithSignals;
     const allRanked = rankedWithSignals;
 
     // earlyRallyCandidates: prefer real ORB signals, always fall back to top rallyScore
@@ -3914,9 +4005,9 @@ Respond ONLY with this JSON structure (fill every field):
       })
       .sort((a, b) => b.avgScore - a.avgScore);
 
-    const bullish = rankedWithSignals.filter(r => r.signal === "STRONG BUY" || r.signal === "BUY").length;
-    const highConf = rankedWithSignals.filter(r => r.confidence === "HIGH").length;
-    const avgScore = rankedWithSignals.reduce((s, r) => s + r.finalScore, 0) / Math.max(1, rankedWithSignals.length);
+    const bullish = top50WithSignals.filter(r => r.signal === "STRONG BUY" || r.signal === "BUY").length;
+    const highConf = top50WithSignals.filter(r => r.confidence === "HIGH").length;
+    const avgScore = top50WithSignals.reduce((s, r) => s + r.finalScore, 0) / Math.max(1, top50WithSignals.length);
 
     // Build real news feed — use live RSS items when available, fall back to synthetic
     const realTopNews = newsIntel ? getTopNews(30) : [];
@@ -3956,7 +4047,7 @@ Respond ONLY with this JSON structure (fill every field):
         }));
 
     const payload = {
-      rankings: allRanked,
+      rankings: top50,  // Top 50 only — frontend shows all 4 signal types within this set
       earlyRallyCandidates,
       liveAlerts,
       newsFeed: realNewsFeed,
@@ -3983,10 +4074,11 @@ Respond ONLY with this JSON structure (fill every field):
         highConfidenceCount: highConf,
         averageFinalScore: +avgScore.toFixed(2),
         marketBias: macroCtx ? (macroCtx.marketBiasScore > 0.60 ? "BULLISH" : macroCtx.marketBiasScore > 0.45 ? "NEUTRAL" : "BEARISH") : (avgScore > 0.60 ? "BULLISH" : avgScore > 0.45 ? "NEUTRAL" : "BEARISH"),
-        strongBuyCount: rankedWithSignals.filter(r => r.signal === "STRONG BUY").length,
-        buyCount:       rankedWithSignals.filter(r => r.signal === "BUY").length,
-        holdCount:      rankedWithSignals.filter(r => r.signal === "HOLD").length,
-        sellCount:      rankedWithSignals.filter(r => r.signal === "SELL").length,
+        // Signal counts from top 50 (what user sees in Rankings tab)
+        strongBuyCount: top50WithSignals.filter(r => r.signal === "STRONG BUY").length,
+        buyCount:       top50WithSignals.filter(r => r.signal === "BUY").length,
+        holdCount:      top50WithSignals.filter(r => r.signal === "HOLD").length,
+        sellCount:      top50WithSignals.filter(r => r.signal === "SELL").length,
         macroRegime:    macroCtx?.regimeSummary ?? "Neutral",
         geoRiskLevel:   macroCtx ? (macroCtx.geoRisk > 0.4 ? "HIGH" : macroCtx.geoRisk > 0.2 ? "MEDIUM" : "LOW") : "LOW",
       },

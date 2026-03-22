@@ -1,1 +1,24 @@
-chore: add Niraj D Patil credit to footer
+fix: deep audit — real NSE stocks, all 4 signals in top 50, improved macro regime
+
+Rankings engine:
+- createUltraQuantUniverse() now uses curated NSE_STOCK_UNIVERSE (~434 stocks)
+  instead of Supabase universe (5221 stocks with undefined marketCap/wrong sectors)
+  → Rankings now show real NSE stocks (INFY, RELIANCE, M&M, etc.) not micro-cap BSE unknowns
+- Rankings API returns top 50 only (was returning all 5221)
+- Signal assignment applied within top 50 slice → all 4 signals always present
+  (STRONG BUY ~15%, BUY ~30%, HOLD ~35%, SELL ~20% within top 50)
+- Summary counts now reflect top 50 distribution
+
+Macro regime:
+- VIX threshold recalibrated for Indian market context:
+  CBOE VIX <28 = RISK_OFF (not FEAR) — India VIX typically runs lower
+  True FEAR = CBOE VIX >28 (COVID/GFC levels)
+- Geo-risk model enhanced: VIX stress + crude stress + rupee stress + news-based
+  (scans recent headlines for war/disaster/fraud/conflict keywords)
+- Added Real Estate, Utilities, Auto, Diversified sector multipliers (were missing)
+- sectorImpact field now dynamic based on live macro conditions (was hardcoded 5 sectors)
+
+Scoring quality:
+- All 434 NSE stocks have proper sector/marketCap/volume data → scoring is meaningful
+- Sector diversity in top 50: Technology, Healthcare, Financials, Energy, Auto,
+  Materials, Real Estate, Industrials, Consumer, Utilities, Telecom
