@@ -228,6 +228,7 @@ function LiveTickerStrip({ rankings }: { rankings: StockIntelligenceResult[] }) 
             </span>
             <span className="text-white/20">|</span>
             <span className="text-violet-400">AI {s100(r.finalScore)}</span>
+            <span className="text-amber-500/50 text-[8px] font-black">[SIM]</span>
           </div>
         ))}
       </div>
@@ -374,12 +375,23 @@ function RankingsTable({ data }: { data: StockIntelligenceResult[] }) {
     { key: 'institutionalScore',    label: 'Inst.',  color: 'text-violet-400' },
     { key: 'aiPredictionScore',     label: 'AI',     color: 'text-cyan-400' },
     { key: 'quantFilterScore',      label: 'Quant',  color: 'text-blue-400' },
-    { key: 'priceChangePercent',    label: 'Chg%',   color: 'text-white' },
+    { key: 'priceChangePercent',    label: 'Chg%~',  color: 'text-white' },
     { key: 'volumeSpike',           label: 'Vol',    color: 'text-amber-300' },
   ];
 
   return (
     <div className="space-y-3">
+      {/* Simulated data notice */}
+      <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3.5 py-2.5">
+        <span className="mt-0.5 text-amber-400 shrink-0">⚠</span>
+        <p className="text-[10px] text-amber-300/80 leading-relaxed">
+          <span className="font-black uppercase tracking-wide text-amber-300">Simulated Data</span>
+          {' '}— Stock symbols are real NSE/BSE stocks. Prices, % change, volume, and all technical scores are
+          AI-simulated (seeded per symbol, refreshed daily). Rankings reflect relative model scores, not live market prices.
+          Connect Upstox for real-time price data on individual stocks.
+        </p>
+      </div>
+
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5">
