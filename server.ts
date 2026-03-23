@@ -1557,7 +1557,7 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
     }
   };
 
-  // Fetch one chunk from Upstox v3
+  // Fetch one chunk from Upstox v3 historical endpoint (past days only)
   const fetchV3Chunk = async (
     token: string,
     instrumentKey: string,
@@ -1573,6 +1573,26 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
       timeout: 15000,
     });
     return response.data?.data?.candles ?? [];
+  };
+
+  // Fetch today's intraday candles from Upstox v3 intraday endpoint
+  // URL: /v3/historical-candle/intraday/{instrument}/{unit}/{n}
+  const fetchV3Intraday = async (
+    token: string,
+    instrumentKey: string,
+    iv: string
+  ): Promise<any[]> => {
+    const isIntraday = iv !== "day" && iv !== "week" && iv !== "month";
+    if (!isIntraday) return []; // intraday endpoint only for sub-day intervals
+    const { unit, n } = toV3Interval(iv);
+    const encodedKey = encodeURIComponent(instrumentKey);
+    const url = `https://api.upstox.com/v3/historical-candle/intraday/${encodedKey}/${unit}/${n}`;
+    const response = await axios.get(url, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+      timeout: 15000,
+    });
+    // Intraday response candles have 7 elements [time,o,h,l,c,vol,oi] — strip OI to match historical format
+    return (response.data?.data?.candles ?? []).map((c: any[]) => c.slice(0, 6));
   };
 
   // API to fetch historical data from Upstox
@@ -1612,6 +1632,10 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
     }
 
     try {
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const isIntradayInterval = selectedInterval !== "day" && selectedInterval !== "week" && selectedInterval !== "month";
+      const toIsToday = to === todayStr;
+
       // Paginate if date range exceeds per-chunk limit
       const chunkDays = maxDaysPerChunk(selectedInterval);
       const fromMs = new Date(from).getTime();
@@ -1620,11 +1644,46 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
 
       let allCandles: any[] = [];
 
-      if (totalDays <= chunkDays) {
-        // Single request
+      if (isIntradayInterval && toIsToday) {
+        // For intraday intervals requesting today's data:
+        // 1. Fetch historical candles for past days (from → yesterday)
+        // 2. Fetch today's candles via intraday endpoint
+        const yesterday = new Date(toMs - 86400000).toISOString().slice(0, 10);
+
+        if (from < todayStr) {
+          // Has past days — fetch historical portion first
+          const histFrom = from;
+          const histTo = yesterday;
+          const histDays = Math.ceil((new Date(histTo).getTime() - new Date(histFrom).getTime()) / 86400000) + 1;
+
+          if (histDays <= chunkDays) {
+            allCandles = await fetchV3Chunk(token, String(instrumentKey), selectedInterval, histFrom, histTo);
+          } else {
+            let chunkTo = new Date(histTo);
+            const histFromMs = new Date(histFrom).getTime();
+            while (chunkTo.getTime() >= histFromMs) {
+              const chunkFrom = new Date(Math.max(histFromMs, chunkTo.getTime() - chunkDays * 86400000));
+              const chunk = await fetchV3Chunk(token, String(instrumentKey), selectedInterval, chunkFrom.toISOString().slice(0, 10), chunkTo.toISOString().slice(0, 10));
+              allCandles = [...chunk, ...allCandles];
+              chunkTo = new Date(chunkFrom.getTime() - 86400000);
+              if (allCandles.length > 5000) break;
+            }
+          }
+        }
+
+        // Fetch today's intraday candles and append (intraday returns newest-first, reverse to oldest-first)
+        const todayCandles = await fetchV3Intraday(token, String(instrumentKey), selectedInterval);
+        const todaySorted = [...todayCandles].reverse(); // oldest first
+        allCandles = [...allCandles, ...todaySorted];
+
+        logAction("historical.intraday.merged", {
+          instrumentKey, interval: selectedInterval, historical: allCandles.length - todaySorted.length, today: todaySorted.length
+        });
+      } else if (totalDays <= chunkDays) {
+        // Single historical request (no today involved)
         allCandles = await fetchV3Chunk(token, String(instrumentKey), selectedInterval, from, to);
       } else {
-        // Paginate: walk backwards from `to` in chunkDays windows
+        // Paginate historical: walk backwards from `to` in chunkDays windows
         let chunkTo = new Date(to);
         while (chunkTo.getTime() > fromMs) {
           const chunkFrom = new Date(Math.max(fromMs, chunkTo.getTime() - chunkDays * 86400000));

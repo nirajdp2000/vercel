@@ -1,8 +1,14 @@
-fix: simulated candles use IST market hours, skip weekends, cap at current time
+fix: use Upstox v3 intraday endpoint for today's candles on Analytics tab
 
-- createSimulatedHistoricalPayload now uses 09:15 IST (03:45 UTC) open
-  and 15:30 IST (10:00 UTC) close instead of wrong UTC times
-- Intraday intervals skip weekends and non-market hours between days
-- Daily/weekly intervals skip Saturday/Sunday
-- endTime capped at Date.now() so today's candles never show future data
-- Fixes Analytics tab showing previous day's candle on market days
+Root cause: Upstox v3 historical endpoint returns 0 candles for today's
+intraday data. Today's candles require the separate intraday endpoint:
+  GET /v3/historical-candle/intraday/{instrument}/{unit}/{n}
+
+Changes:
+- Added fetchV3Intraday() using the correct intraday endpoint
+- Historical endpoint now detects when toDate === today + intraday interval
+- Fetches past days via historical endpoint + today via intraday endpoint
+- Merges and returns combined candle array (oldest-first)
+- Intraday response has 7 elements [t,o,h,l,c,vol,oi] — OI stripped to match
+- Also fixed simulated fallback to use IST market hours (03:45-10:00 UTC)
+  and skip weekends/non-market hours between days
