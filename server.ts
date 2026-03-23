@@ -982,6 +982,7 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
       sector: profile.sector,
       industry: profile.industry,
       marketCap: profile.marketCap,
+      currentPrice: null as number | null, // will be replaced by real Yahoo price in overlay
       cagr,
       momentum,
       trendStrength,
@@ -1155,6 +1156,92 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
     };
   };
 
+  // ── Yahoo Finance real-price helpers (used by UltraQuant, Multibagger, Macro) ──
+
+  /**
+   * Fetch a single Yahoo Finance quote.
+   * Validates that the returned symbol actually matches what we requested
+   * (prevents Yahoo returning Nifty/index data for unknown symbols).
+   */
+  const fetchYahooQuote = async (symbol: string): Promise<{ price: number; changePct: number } | null> => {
+    try {
+      const encoded = encodeURIComponent(symbol);
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?interval=1d&range=1d`;
+      const resp = await axios.get(url, {
+        timeout: 8000,
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+      });
+      const result = resp.data?.chart?.result?.[0];
+      const meta = result?.meta;
+      if (!meta) return null;
+
+      // Validate: returned symbol must loosely match what we asked for.
+      // Yahoo sometimes returns index/ETF data for unknown NSE symbols.
+      const returnedSym: string = (meta.symbol ?? '').toUpperCase();
+      const requestedSym: string = symbol.toUpperCase().replace('.NS', '');
+      if (returnedSym && !returnedSym.includes(requestedSym) && !requestedSym.includes(returnedSym.replace('.NS', ''))) {
+        return null; // mismatch — Yahoo returned wrong instrument
+      }
+
+      const price = meta.regularMarketPrice ?? meta.chartPreviousClose ?? 0;
+      if (price <= 0) return null;
+
+      return {
+        price,
+        changePct: meta.regularMarketChangePercent ?? 0,
+      };
+    } catch (_e) {
+      return null;
+    }
+  };
+
+  // Per-symbol TTL cache — keyed by NSE symbol, expires per entry
+  const perSymbolPriceCache = new Map<string, { price: number; changePct: number; expiresAt: number }>();
+
+  /**
+   * Fetch real NSE prices for a list of symbols via Yahoo Finance (.NS suffix).
+   * Uses a per-symbol cache so stale entries for one stock don't block others.
+   * Batches requests with a small delay between chunks to avoid rate limiting.
+   */
+  const fetchRealPricesForSymbols = async (symbols: string[]): Promise<Map<string, { price: number; changePct: number }>> => {
+    const now = Date.now();
+    const ttl = isMarketDay() ? 5 * 60_000 : 60 * 60_000;
+    const result = new Map<string, { price: number; changePct: number }>();
+
+    // Separate symbols into cached vs needs-fetch
+    const toFetch: string[] = [];
+    for (const sym of symbols) {
+      const cached = perSymbolPriceCache.get(sym);
+      if (cached && cached.expiresAt > now) {
+        result.set(sym, { price: cached.price, changePct: cached.changePct });
+      } else {
+        toFetch.push(sym);
+      }
+    }
+
+    if (toFetch.length === 0) return result;
+
+    // Fetch in small batches with delay to avoid Yahoo rate limiting
+    const BATCH = 5;
+    const DELAY_MS = 200;
+    for (let i = 0; i < toFetch.length; i += BATCH) {
+      const chunk = toFetch.slice(i, i + BATCH);
+      await Promise.all(chunk.map(async sym => {
+        const q = await fetchYahooQuote(`${sym}.NS`).catch(() => null);
+        if (q && q.price > 0) {
+          perSymbolPriceCache.set(sym, { ...q, expiresAt: now + ttl });
+          result.set(sym, q);
+        }
+      }));
+      if (i + BATCH < toFetch.length) {
+        await new Promise(r => setTimeout(r, DELAY_MS));
+      }
+    }
+
+    logAction('real-prices.fetched', { fetched: toFetch.length, cached: symbols.length - toFetch.length, resolved: result.size });
+    return result;
+  };
+
   const buildUltraQuantDashboard = async (payload: UltraQuantRequest = {}) => {
     const request = normalizeUltraQuantRequest(payload);
     const rawUniverse = await createUltraQuantUniverse();
@@ -1183,6 +1270,26 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
 
     const results = resultPool.slice(0, 100);
     const totalReturned = results.length;
+
+    // ── Overlay real Yahoo Finance prices ──────────────────────────────────
+    // Replace synthetic currentPrice & lstmPredictedPrice with live market data.
+    // Falls back to synthetic value if Yahoo returns nothing (e.g. weekend/holiday).
+    try {
+      const symbols = results.map((r) => r.symbol);
+      const realPrices = await fetchRealPricesForSymbols(symbols);
+      for (const r of results) {
+        const real = realPrices.get(r.symbol);
+        if (real && real.price > 0) {
+          // Capture synthetic offset BEFORE overwriting currentPrice
+          const syntheticCurrent = r.currentPrice ?? real.price;
+          const syntheticOffset = r.lstmPredictedPrice && syntheticCurrent > 0
+            ? (r.lstmPredictedPrice - syntheticCurrent) / syntheticCurrent
+            : 0.02;
+          r.currentPrice = Number(real.price.toFixed(2));
+          r.lstmPredictedPrice = Number((real.price * (1 + syntheticOffset)).toFixed(2));
+        }
+      }
+    } catch (_e) { /* keep synthetic prices on failure */ }
 
     console.log(JSON.stringify({ totalLoaded, totalProcessed, totalAfterFilter, totalReturned }));
 
@@ -3500,6 +3607,7 @@ Respond ONLY with this JSON structure (fill every field):
         symbol:           profile.symbol,
         companyName:      MB_COMPANY_NAMES[profile.symbol] ?? `${profile.symbol} Ltd`,
         sector:           profile.sector,
+        currentPrice:     null as number | null, // will be replaced by real Yahoo price in overlay
         bullishScore:     Number(bullishScore.toFixed(2)),
         trendScore:       Number(trend.toFixed(2)),
         momentumScore:    Number(momentum.toFixed(2)),
@@ -3534,6 +3642,19 @@ Respond ONLY with this JSON structure (fill every field):
       : scored;
 
     const top100 = finalStocks.slice(0, 100).map((s, i) => ({ rank: i + 1, ...s }));
+
+    // ── Overlay real Yahoo Finance prices ──────────────────────────────────
+    try {
+      const symbols = top100.map((s) => s.symbol);
+      const realPrices = await fetchRealPricesForSymbols(symbols);
+      for (const s of top100) {
+        const real = realPrices.get(s.symbol);
+        if (real && real.price > 0) {
+          s.currentPrice = Number(real.price.toFixed(2));
+        }
+      }
+    } catch (_e) { /* keep synthetic prices on failure */ }
+
     const avgBullishScore = top100.reduce((sum, s) => sum + s.bullishScore, 0) / top100.length;
 
     const totalLoaded = universe.length;
@@ -4329,52 +4450,6 @@ Respond ONLY with this JSON structure (fill every field):
   // ── Real-time Macro Data Fetcher ─────────────────────────────────────────
   // Cache: 15 min on trading days, 60 min on weekends (macro data doesn't change that fast)
   let macroDataCache: { expiresAt: number; snapshot: any } | null = null;
-
-  const fetchYahooQuote = async (symbol: string): Promise<{ price: number; changePct: number } | null> => {
-    try {
-      const encoded = encodeURIComponent(symbol);
-      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?interval=1d&range=1d`;
-      const resp = await axios.get(url, {
-        timeout: 8000,
-        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
-      });
-      const meta = resp.data?.chart?.result?.[0]?.meta;
-      if (!meta) return null;
-      return {
-        price: meta.regularMarketPrice ?? meta.chartPreviousClose ?? 0,
-        changePct: meta.regularMarketChangePercent ?? 0,
-      };
-    } catch (_e) {
-      return null;
-    }
-  };
-
-  // ── Real NSE Stock Price Cache (Yahoo Finance, 5-min TTL) ─────────────────
-  // Fetches live prices for top NSE stocks using Yahoo Finance (no auth needed).
-  // Symbols use .NS suffix (e.g., RELIANCE.NS). Falls back gracefully.
-  let realPriceCache: { expiresAt: number; prices: Map<string, { price: number; changePct: number }> } | null = null;
-
-  const fetchRealPricesForSymbols = async (symbols: string[]): Promise<Map<string, { price: number; changePct: number }>> => {
-    const now = Date.now();
-    if (realPriceCache && realPriceCache.expiresAt > now) return realPriceCache.prices;
-
-    const prices = new Map<string, { price: number; changePct: number }>();
-    // Batch in groups of 10 to avoid rate limiting
-    const chunks: string[][] = [];
-    for (let i = 0; i < symbols.length; i += 10) chunks.push(symbols.slice(i, i + 10));
-
-    for (const chunk of chunks) {
-      await Promise.all(chunk.map(async sym => {
-        const q = await fetchYahooQuote(`${sym}.NS`).catch(() => null);
-        if (q && q.price > 0) prices.set(sym, q);
-      }));
-    }
-
-    const ttl = isMarketDay() ? 5 * 60_000 : 60 * 60_000;
-    realPriceCache = { expiresAt: now + ttl, prices };
-    logAction('real-prices.fetched', { count: prices.size, total: symbols.length });
-    return prices;
-  };
 
   const buildLiveMacroSnapshot = async (): Promise<any> => {
     const tradingDay = isMarketDay();
