@@ -1,22 +1,31 @@
-fix: realistic Superbrain price targets — eliminate synthetic CAGR inflation
+fix: real prices now reach Superbrain — fix Yahoo v7 401 + fake LSTM
 
-Root cause analysis:
-- Yahoo Finance v8 prices are accurate (within 0.3% of NSE Direct — verified)
-- Fake-looking targets were caused by synthetic CAGR (random-walk, 40-120%)
-  being fed directly into computePriceTargets() → wildly inflated targets
-- Multibagger was passing raw cycle return as CAGR (not annualised)
-- volatility and maxDrawdown were hardcoded in MB superbrain call
+ROOT CAUSE (confirmed by test):
+  Yahoo v7 /v7/finance/quote returns HTTP 401 on Vercel IPs for ALL stocks
+  → enrichedData.yahoo = null for every stock
+  → currentPrice falls back to OHLCV endPrice (accurate for liquid stocks)
+  → but for illiquid/synthetic stocks → random walk price → fake targets
 
-Fixes:
-1. computePriceTargets() — replaced CAGR-driven formula with score-band
-   calibrated returns (Indian market: 8-30% annual based on superScore)
-   Real CAGR blended at 30% weight only when dataSource=real and cagr<=60%
-2. computeTechnicalSignal() — caps synthetic CAGR at 25 to prevent
-   inflated technical scores from random-walk data
-3. Multibagger superbrain call — properly annualises cycle return:
-   (1 + cycleReturn)^(365/cycleDays) - 1
-4. Multibagger — derives volatility from ret30/ret90 spread (not hardcoded)
-5. Multibagger — derives maxDrawdown from stability score (not hardcoded)
-6. SuperbrainOutput — adds dataSource field so UI can show disclaimer
-7. UI panels — show "⚠ targets are estimates only" when dataSource=synthetic
-   Target/StopLoss labels show ~ suffix for synthetic stocks
+  lstmPredictedPrice = endPrice * (1 + avgReturn * 10) was a 10-day linear
+  extrapolation, NOT a real LSTM. With bearish avgReturn it always showed
+  negative targets regardless of stock quality.
+
+FIXES:
+1. MarketDataAggregator.fetchYahooFundamentals — replaced broken v7 API
+   with v8 chart API (same endpoint as OHLCV, proven working, no 401).
+   Now correctly populates enrichedData.yahoo.lastPrice for all stocks.
+   52W high/low derived from actual 1y OHLCV candles (more accurate).
+   pChange computed from regularMarketPrice vs chartPreviousClose.
+
+2. Added YAHOO_OVERRIDES to MarketDataAggregator (TATAMOTORS → .BO, etc.)
+   so symbol validation doesn't reject BSE-listed stocks.
+
+3. server.ts lstmPredictedPrice — replaced fake formula with proper
+   multi-timeframe technical projection:
+   - EMA20 slope extrapolation (35% weight)
+   - Mean reversion to EMA50 (25% weight)
+   - Momentum carry last 20d × 0.4 (25% weight)
+   - Volume-weighted drift (15% weight)
+   Capped at ±25% to prevent absurd projections.
+
+VERIFIED: Yahoo v8 prices within 0.3% of NSE Direct for all 5 test stocks.

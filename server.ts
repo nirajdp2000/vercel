@@ -1088,7 +1088,55 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
     gradientBoost = clamp(gradientBoost + random() * 0.08, 0.02, 0.98);
 
     const avgReturn = average(buildReturns(closes.slice(-50)));
-    const lstmPredictedPrice = endPrice * (1 + avgReturn * 10);
+
+    /**
+     * Multi-timeframe technical price projection (replaces fake LSTM formula).
+     *
+     * Uses 4 signals blended by weight:
+     *  1. EMA trend extrapolation (20d slope × 20 days forward)
+     *  2. Mean-reversion to EMA50 (price tends to revert within 20 days)
+     *  3. Momentum carry (last 20d return projected forward proportionally)
+     *  4. Volume-weighted drift (recent vol-adjusted return)
+     *
+     * Capped at ±25% to prevent absurd projections.
+     * This is a technical projection, NOT a fundamental valuation.
+     */
+    const lstmPredictedPrice = (() => {
+      if (closes.length < 50) return endPrice * (1 + avgReturn * 10);
+
+      // Signal 1: EMA20 slope extrapolated 20 days forward
+      const ema20Slope = calculateSlope(ema20.slice(-20)); // normalised slope
+      const ema20Proj = endPrice * (1 + ema20Slope * 20 * 0.0008);
+
+      // Signal 2: Mean reversion toward EMA50
+      const ema50Last = ema50[ema50.length - 1] ?? endPrice;
+      const gapToEma50 = (ema50Last - endPrice) / endPrice; // negative if above EMA50
+      const meanRevProj = endPrice * (1 + gapToEma50 * 0.35); // 35% reversion in 20d
+
+      // Signal 3: Momentum carry — last 20d return × 0.4 (momentum decays)
+      const ret20d = closes.length >= 20
+        ? (endPrice - closes[closes.length - 20]) / closes[closes.length - 20]
+        : avgReturn * 20;
+      const momentumProj = endPrice * (1 + ret20d * 0.4);
+
+      // Signal 4: Volume-weighted drift (last 10 candles)
+      const last10 = candles.slice(-10);
+      const vwDrift = last10.length > 1
+        ? last10.slice(1).reduce((sum, c, i) => {
+            const ret = (c.close - last10[i].close) / last10[i].close;
+            return sum + ret * c.volume;
+          }, 0) / Math.max(1, last10.reduce((s, c) => s + c.volume, 0))
+        : avgReturn;
+      const vwProj = endPrice * (1 + vwDrift * 20);
+
+      // Blend: trend 35%, mean-reversion 25%, momentum 25%, vol-weighted 15%
+      const blended = ema20Proj * 0.35 + meanRevProj * 0.25 + momentumProj * 0.25 + vwProj * 0.15;
+
+      // Cap at ±25% from current price
+      const maxUp   = endPrice * 1.25;
+      const maxDown = endPrice * 0.75;
+      return Math.min(maxUp, Math.max(maxDown, blended));
+    })();
     const marketRegime = volatility > 0.04 ? "High Volatility" : Math.abs(trendStrength) > 2 ? "Trending" : "Sideways";
     const marketState = recentVolumeRatio > 1.8 && priceChange5m > 0 ? "Accumulation" : breakoutFrequency > 0.12 ? "Breakout" : priceChange5m < -1 ? "Distribution" : "Reversal";
     const rlAction = gradientBoost > 0.72 && sentimentScore > 65 ? "BUY" : gradientBoost < 0.35 ? "SELL" : "HOLD";
