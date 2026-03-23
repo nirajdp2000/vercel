@@ -647,18 +647,59 @@ setFallbackUniverse(NSE_STOCK_UNIVERSE.map(s => ({
   instrumentKey: `NSE_EQ|${s.symbol}`,
 })));
 
-const createUltraQuantUniverse = (): UltraQuantProfile[] => {
-  // Use the embedded curated NSE universe directly — no Supabase, no network.
-  // This is the only safe option for Vercel's 10s function timeout.
-  // The curated list has ~440 stocks with accurate sector/industry/marketCap data.
-  return NSE_STOCK_UNIVERSE.map(s => ({
-    symbol:        s.symbol,
-    sector:        s.sector,
-    industry:      s.industry,
-    marketCap:     s.marketCap,
-    averageVolume: s.averageVolume,
+// ── Module-level result caches (shared across requests on warm instances) ────
+const ultraQuantCache = new Map<string, { expiresAt: number; payload: any }>();
+const ULTRA_QUANT_CACHE_TTL = 60_000;
+const multibaggerCache = new Map<number, { expiresAt: number; payload: any }>();
+
+// ── Universe cache: starts with embedded 434, upgrades to Supabase 5000+ in background ──
+let _cachedUniverse: UltraQuantProfile[] | null = null;
+let _universeLoading = false;
+
+/**
+ * Get the current universe synchronously.
+ * Returns embedded 434 stocks immediately on cold start.
+ * After first call, triggers background Supabase load to upgrade to 5000+ stocks.
+ * Subsequent calls return the upgraded universe once loaded.
+ */
+const getUniverseSync = (): UltraQuantProfile[] => {
+  // Return cached (either embedded or Supabase-loaded)
+  if (_cachedUniverse) return _cachedUniverse;
+
+  // Seed with embedded universe immediately
+  _cachedUniverse = NSE_STOCK_UNIVERSE.map(s => ({
+    symbol: s.symbol, sector: s.sector, industry: s.industry,
+    marketCap: s.marketCap, averageVolume: s.averageVolume,
   }));
+
+  // Trigger background Supabase load if not already running
+  if (!_universeLoading) {
+    _universeLoading = true;
+    getUniverseAsync().then(stocks => {
+      if (stocks.length > _cachedUniverse!.length) {
+        const curatedMap = new Map(NSE_STOCK_UNIVERSE.map(s => [s.symbol, s]));
+        _cachedUniverse = stocks.map(s => {
+          const c = curatedMap.get(s.symbol);
+          return {
+            symbol:        s.symbol,
+            sector:        c?.sector  || s.sector  || 'Unknown',
+            industry:      c?.industry || s.industry || 'Unknown',
+            marketCap:     c?.marketCap     || (s.marketCap     > 0 ? s.marketCap     : 1000),
+            averageVolume: c?.averageVolume || (s.averageVolume > 0 ? s.averageVolume : 100000),
+          };
+        });
+        // Invalidate scan caches so next request uses full universe
+        ultraQuantCache.clear();
+        multibaggerCache.clear();
+        console.log(`[Universe] Upgraded to ${_cachedUniverse.length} stocks from Supabase`);
+      }
+    }).catch(() => {}).finally(() => { _universeLoading = false; });
+  }
+
+  return _cachedUniverse;
 };
+
+const createUltraQuantUniverse = (): UltraQuantProfile[] => getUniverseSync();
 
 
   const buildReturns = (prices: number[]) => {
@@ -1347,9 +1388,7 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
     return result;
   };
 
-  // ── UltraQuant dashboard result cache (TTL: 60s) ─────────────────────────
-  const ultraQuantCache = new Map<string, { expiresAt: number; payload: any }>();
-  const ULTRA_QUANT_CACHE_TTL = 60_000; // 60 seconds
+  // ── UltraQuant dashboard result cache (TTL: 60s) — defined at module level ──
 
   const buildUltraQuantDashboard = async (payload: UltraQuantRequest = {}) => {
     const request = normalizeUltraQuantRequest(payload);
@@ -1362,26 +1401,20 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
     const rawUniverse = createUltraQuantUniverse();
     const totalLoaded = rawUniverse.length;
 
-    // ── Pass 1: Lightweight pre-score entire universe (CAGR + momentum only, no EMA/VP/OB) ──
-    // This is ~10x faster than full analyzeUltraQuantProfile
+    // ── Pass 1: Ultra-fast pre-score entire universe using deterministic hash ──
+    // No candle simulation — O(1) per stock. Handles 5000+ stocks in <50ms.
     const preSorted = rawUniverse.map(profile => {
-      const random = seededGenerator(symbolSeed(profile.symbol));
-      const totalDays = Math.max(260, request.historicalPeriodYears * 252);
-      const sectorDrift = ({
-        Technology: 0.00165, Financials: 0.0012, Energy: 0.0011,
-        Healthcare: 0.00145, Consumer: 0.00115, Industrials: 0.00105,
-        Telecom: 0.001, Materials: 0.00095
-      } as Record<string, number>)[profile.sector] ?? 0.001;
-
-      let close = 80 + random() * 1800;
-      const startPrice = close;
-      for (let d = 0; d < totalDays; d++) {
-        const drift = sectorDrift + Math.sin(d / 31 + random()) * 0.006 + (random() - 0.5) * 0.05;
-        close = Math.max(20, close * (1 + drift));
-      }
-      const cagr = startPrice > 0 ? (Math.pow(close / startPrice, 1 / request.historicalPeriodYears) - 1) * 100 : 0;
-      return { symbol: profile.symbol, cagr };
-    }).sort((a, b) => b.cagr - a.cagr);
+      const seed = symbolSeed(profile.symbol);
+      const sectorBonus = ({
+        Technology: 8, Healthcare: 7, Financials: 6, Consumer: 5,
+        Industrials: 4, Energy: 3, Telecom: 2, Materials: 2
+      } as Record<string, number>)[profile.sector] ?? 3;
+      // Deterministic score: mix of symbol hash + sector + marketCap tier
+      const capTier = profile.marketCap > 100000 ? 10 : profile.marketCap > 20000 ? 7 : profile.marketCap > 5000 ? 4 : 1;
+      const hashScore = ((seed * 2654435761) >>> 0) / 4294967296 * 60; // 0-60
+      const score = hashScore + sectorBonus + capTier + (request.historicalPeriodYears * 0.5);
+      return { symbol: profile.symbol, score };
+    }).sort((a, b) => b.score - a.score);
 
     // Take top 100 for full analysis
     const top100Symbols = new Set(preSorted.slice(0, 100).map(r => r.symbol));
@@ -1453,7 +1486,7 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
       .sort((left, right) => right.averageScore - left.averageScore);
 
     const summary = {
-      scannedUniverse: totalLoaded,
+      scannedUniverse: totalLoaded,  // full universe size (434 → 5000+ after warm)
       returned: totalReturned,
       historicalPeriodYears: request.historicalPeriodYears,
       avgScore: Number(average(results.map((item) => item.score)).toFixed(2)),
@@ -3685,9 +3718,8 @@ Respond ONLY with this JSON structure (fill every field):
   };
 
   /**
-   * Per-cycle result cache. Invalidated by TTL.
+   * Per-cycle result cache — defined at module level.
    */
-  const multibaggerCache = new Map<number, { expiresAt: number; payload: any }>();
 
   const MULTIBAGGER_CACHE_TTL: Record<MultibaggerCycle, number> = {
     30: 30_000, 60: 45_000, 90: 60_000, 120: 90_000, 180: 120_000, 300: 180_000,
@@ -3712,15 +3744,14 @@ Respond ONLY with this JSON structure (fill every field):
     const weights  = MB_CYCLE_WEIGHTS[cycleDays];
     const fullUniverse = createUltraQuantUniverse();
 
-    // ── Pass 1: Lightweight pre-sort to find top 100 candidates ──
-    // Use a fast cycle-return estimate (no full series build) to rank stocks
+    // ── Pass 1: Ultra-fast pre-sort using deterministic hash — handles 5000+ stocks ──
     const preScored = fullUniverse.map(p => {
-      const random = seededGenerator(symbolSeed(p.symbol));
-      let close = 80 + random() * 1800;
-      for (let d = 0; d < cycleDays; d++) {
-        close = Math.max(20, close * (1 + 0.001 + (random() - 0.5) * 0.05));
-      }
-      return { symbol: p.symbol, score: close };
+      const seed = symbolSeed(p.symbol);
+      const sectorBonus = ({ Technology: 8, Healthcare: 7, Financials: 6, Consumer: 5,
+        Industrials: 4, Energy: 3, Telecom: 2, Materials: 2 } as Record<string, number>)[p.sector] ?? 3;
+      const capTier = p.marketCap > 100000 ? 10 : p.marketCap > 20000 ? 7 : p.marketCap > 5000 ? 4 : 1;
+      const hashScore = ((seed * 2654435761) >>> 0) / 4294967296 * 60;
+      return { symbol: p.symbol, score: hashScore + sectorBonus + capTier };
     }).sort((a, b) => b.score - a.score);
 
     const top100MBSet = new Set(preScored.slice(0, 100).map(x => x.symbol));
