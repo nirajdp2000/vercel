@@ -1,31 +1,33 @@
-fix: real prices now reach Superbrain — fix Yahoo v7 401 + fake LSTM
+fix: eliminate all fake prices — null for SIM stocks, real-only for LIVE
 
-ROOT CAUSE (confirmed by test):
-  Yahoo v7 /v7/finance/quote returns HTTP 401 on Vercel IPs for ALL stocks
-  → enrichedData.yahoo = null for every stock
-  → currentPrice falls back to OHLCV endPrice (accurate for liquid stocks)
-  → but for illiquid/synthetic stocks → random walk price → fake targets
-
-  lstmPredictedPrice = endPrice * (1 + avgReturn * 10) was a 10-day linear
-  extrapolation, NOT a real LSTM. With bearish avgReturn it always showed
-  negative targets regardless of stock quality.
+INVESTIGATION RESULTS (tested all sources):
+  - Yahoo v8 chart (.NS/.BO): ✅ ONLY reliable free source, within 0.3% of NSE
+  - NSE India API: ❌ 403 from Vercel IPs
+  - Moneycontrol: ❌ inconsistent (works for TCS, fails for others)
+  - BSE India API: ❌ returns HTML
+  - Stooq: ❌ N/D for Indian stocks
+  - Twelve Data: ❌ needs paid key
+  - Upstox: ❌ needs auth token
+  - BLOOM is BSE-only (BLOOM.BO = ₹11.46) — Yahoo .NS returns 404
 
 FIXES:
-1. MarketDataAggregator.fetchYahooFundamentals — replaced broken v7 API
-   with v8 chart API (same endpoint as OHLCV, proven working, no 401).
-   Now correctly populates enrichedData.yahoo.lastPrice for all stocks.
-   52W high/low derived from actual 1y OHLCV candles (more accurate).
-   pChange computed from regularMarketPrice vs chartPreviousClose.
+1. currentPrice: null for synthetic stocks (no fake random-walk prices)
+   - UltraQuant: null when no Yahoo enrichment AND no real OHLCV candles
+   - Multibagger: null when no Yahoo enrichment AND no real OHLCV candles
+   - UI already shows '—' for null currentPrice
 
-2. Added YAHOO_OVERRIDES to MarketDataAggregator (TATAMOTORS → .BO, etc.)
-   so symbol validation doesn't reject BSE-listed stocks.
+2. lstmPredictedPrice: null for synthetic stocks
+   - Type updated to number | null in AnalysisResult
+   - Display shows '—' instead of fake ₹14880-style numbers
+   - LSTM Target card only shows green dot when dataSource=real
 
-3. server.ts lstmPredictedPrice — replaced fake formula with proper
-   multi-timeframe technical projection:
-   - EMA20 slope extrapolation (35% weight)
-   - Mean reversion to EMA50 (25% weight)
-   - Momentum carry last 20d × 0.4 (25% weight)
-   - Volume-weighted drift (15% weight)
-   Capped at ±25% to prevent absurd projections.
+3. Superbrain: passes null price for synthetic stocks
+   - computePriceTargets returns null targets when price=null
+   - No more fake ₹14,249 targets for BLOOM/SIM stocks
 
-VERIFIED: Yahoo v8 prices within 0.3% of NSE Direct for all 5 test stocks.
+4. startServerlessApp: pre-warms enrichment for top 50 symbols at startup
+   - First scan request now gets real prices from warm cache
+   - Previously: cold start → all enrichment null → all prices synthetic
+
+5. MarketDataAggregator: added YAHOO_OVERRIDES for BSE-only stocks
+   - TATAMOTORS, M&M, BAJAJ-AUTO now resolve correctly via .BO

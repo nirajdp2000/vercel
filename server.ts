@@ -1209,10 +1209,13 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
       sector: profile.sector,
       industry: profile.industry,
       marketCap: profile.marketCap,
-      // Use Yahoo real-time price when available, then OHLCV last close, then synthetic
+      // Real price: Yahoo v8 lastPrice (from enrichment cache) OR OHLCV last close (real candles only)
+      // NEVER show synthetic random-walk price as currentPrice — null means "no real price available"
       currentPrice: enrichedData?.yahoo?.lastPrice
         ? Number(enrichedData.yahoo.lastPrice.toFixed(2))
-        : Number(endPrice.toFixed(2)),
+        : (realCandles && realCandles.length >= 60)
+          ? Number(endPrice.toFixed(2))
+          : null,  // synthetic — no real price
       dataSource: enrichedData?.yahoo ? 'real' : (realCandles && realCandles.length >= 60) ? 'real' : 'synthetic',
       // Enriched fields from Yahoo + Screener.in
       pe: enrichedData?.yahoo?.pe ?? enrichedData?.screener?.pe ?? null,
@@ -1243,7 +1246,10 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
       drawdownProbability,
       positionSize,
       gradientBoostProb: gradientBoost * 100,
-      lstmPredictedPrice,
+      // LSTM target: only show when we have a real price base
+      lstmPredictedPrice: (enrichedData?.yahoo?.lastPrice || (realCandles && realCandles.length >= 60))
+        ? Number(lstmPredictedPrice.toFixed(2))
+        : null,
       marketRegime,
       marketState,
       rlAction,
@@ -1283,7 +1289,8 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
         pChange: enrichedData?.yahoo?.pChange ?? null,
         dataQuality: (enrichedData?.dataQuality ?? (realCandles && realCandles.length >= 60 ? 'MEDIUM' : 'LOW')) as 'HIGH' | 'MEDIUM' | 'LOW',
         dataSource: (enrichedData?.yahoo ? 'real' : (realCandles && realCandles.length >= 60) ? 'real' : 'synthetic') as 'real' | 'synthetic',
-      }, enrichedData?.yahoo?.lastPrice ?? endPrice),
+      // Pass real price only — null for synthetic so Superbrain suppresses targets
+      }, enrichedData?.yahoo?.lastPrice ?? ((realCandles && realCandles.length >= 60) ? endPrice : null)),
     };
   };
 
@@ -3925,10 +3932,12 @@ Respond ONLY with this JSON structure (fill every field):
         companyName:      MB_COMPANY_NAMES[profile.symbol] ?? `${profile.symbol} Ltd`,
         sector:           profile.sector,
         dataSource:       enriched?.yahoo ? 'real' : hasRealOHLCV ? 'real' : 'synthetic',
-        // Use Yahoo real-time price first, then OHLCV last close
+        // Real price only — null for synthetic stocks (no fake random-walk prices shown)
         currentPrice:     enriched?.yahoo?.lastPrice
           ? Number(enriched.yahoo.lastPrice.toFixed(2))
-          : Number(seriesCache[i].closes[seriesCache[i].closes.length - 1].toFixed(2)),
+          : hasRealOHLCV
+            ? Number(seriesCache[i].closes[seriesCache[i].closes.length - 1].toFixed(2))
+            : null,
         pChange:          enriched?.yahoo?.pChange ?? null,
         weekHigh52:       enriched?.yahoo?.weekHigh52 ?? null,
         weekLow52:        enriched?.yahoo?.weekLow52 ?? null,
@@ -3995,7 +4004,7 @@ Respond ONLY with this JSON structure (fill every field):
           ret180: momentumResults[i].ret180 * 100,
           dataQuality: (enriched?.dataQuality ?? (hasRealOHLCV ? 'MEDIUM' : 'LOW')) as 'HIGH' | 'MEDIUM' | 'LOW',
           dataSource: (enriched?.yahoo ? 'real' : hasRealOHLCV ? 'real' : 'synthetic') as 'real' | 'synthetic',
-        }, enriched?.yahoo?.lastPrice ?? seriesCache[i].closes[seriesCache[i].closes.length - 1]),
+        }, enriched?.yahoo?.lastPrice ?? (hasRealOHLCV ? seriesCache[i].closes[seriesCache[i].closes.length - 1] : null)),
       };
     });
 
@@ -5957,6 +5966,18 @@ export async function startServerlessApp() {
     if (stocks.length > 0) {
       (global as any).__supabaseUniverse = stocks;
       console.log(`[Universe] Pre-loaded ${stocks.length} stocks into global`);
+
+      // ── Pre-warm OHLCV + enrichment for top 100 symbols at startup ──
+      // This ensures the FIRST scan request gets real prices, not synthetic.
+      // Fire-and-forget — never blocks the app from starting.
+      const top100 = stocks.slice(0, 100).map((s: any) => s.symbol ?? s.nse_symbol ?? s.Symbol).filter(Boolean);
+      if (top100.length > 0) {
+        // Warm OHLCV in background (needed for real candles + endPrice)
+        import('./src/services/MarketDataAggregator').then(({ enrichStocksBackground }) => {
+          enrichStocksBackground(top100.slice(0, 50)).catch(() => {});
+        }).catch(() => {});
+        console.log(`[Startup] Pre-warming enrichment for ${Math.min(50, top100.length)} symbols`);
+      }
     }
   }).catch(() => {});
 

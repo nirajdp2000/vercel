@@ -22,7 +22,7 @@ type AnalysisResult = {
   score: number; earningsGrowth: number; revenueGrowth: number;
   volumeGrowth: number; breakoutFrequency: number; sentimentScore: number;
   marketCap: number; drawdownProbability: number; positionSize: number;
-  gradientBoostProb: number; lstmPredictedPrice: number;
+  gradientBoostProb: number; lstmPredictedPrice: number | null;
   marketRegime: string; marketState: string; rlAction: string;
   finalPredictionScore: number; orderImbalance: number;
   volumeProfile?: { poc?: number; vah?: number; val?: number };
@@ -368,7 +368,7 @@ function TopPickCard({ stock }: { stock: AnalysisResult }) {
       <div className="flex items-center justify-between pt-1 border-t border-white/5">
         <RegimePill regime={stock.marketRegime} />
         <span className="text-[9px] text-zinc-500">HMM: <span className="text-amber-300 font-black">{stock.marketState}</span></span>
-        <span className="text-[9px] text-zinc-500">LSTM: <span className="text-cyan-300 font-black">{stock.lstmPredictedPrice.toFixed(1)}</span></span>
+        <span className="text-[9px] text-zinc-500">LSTM: <span className="text-cyan-300 font-black">{stock.lstmPredictedPrice != null ? stock.lstmPredictedPrice.toFixed(1) : '—'}</span></span>
       </div>
     </div>
   );
@@ -729,7 +729,7 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
                             { label: 'Vol Growth',     value: `${stock.volumeGrowth.toFixed(1)}%`,                                                              color: 'text-amber-400',  real: (stock as any).dataSource === 'real' },
                             { label: 'Max Drawdown',   value: `${stock.maxDrawdown.toFixed(1)}%`,                                                               color: stock.maxDrawdown <= 25 ? 'text-emerald-400' : 'text-rose-400', real: (stock as any).dataSource === 'real' },
                             { label: 'Breakout Freq',  value: `${(stock.breakoutFrequency * 100).toFixed(1)}%`,                                                 color: 'text-amber-400',  real: (stock as any).dataSource === 'real' },
-                            { label: 'LSTM Target',    value: `₹${stock.lstmPredictedPrice.toFixed(0)}`,                                                        color: 'text-cyan-300',   real: false },
+                            { label: 'LSTM Target',    value: stock.lstmPredictedPrice != null ? `₹${stock.lstmPredictedPrice.toFixed(0)}` : '—',              color: 'text-cyan-300',   real: stock.lstmPredictedPrice != null && (stock as any).dataSource === 'real' },
                             { label: 'HMM State',      value: stock.marketState,                                                                                color: 'text-amber-300',  real: false },
                           ].map(m => (
                             <div key={m.label} className={`rounded-xl border px-2.5 py-2 ${m.real ? 'bg-emerald-500/[0.04] border-emerald-500/15' : 'bg-white/[0.03] border-white/5'}`}>
