@@ -841,46 +841,69 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
   // ── Real OHLCV cache: symbol → candles (TTL: 60 min) ─────────────────────
   const realOHLCVCache = new Map<string, { candles: UltraQuantCandle[]; expiresAt: number }>();
 
+  // Known Yahoo Finance symbol overrides (NSE symbol → Yahoo ticker)
+  // Used when the default SYMBOL.NS returns 404
+  const YAHOO_SYMBOL_OVERRIDES: Record<string, string> = {
+    'TATAMOTORS':  'TATAMOTORS.BO',  // BSE fallback
+    'M&M':         'M%26M.NS',
+    'BAJAJ-AUTO':  'BAJAJ-AUTO.NS',
+    'HDFCLIFE':    'HDFCLIFE.NS',
+    'SBILIFE':     'SBILIFE.NS',
+    'ICICIGI':     'ICICIGI.NS',
+    'NAUKRI':      'NAUKRI.NS',
+    'DMART':       'DMART.NS',
+  };
+
   /**
-   * Fetch 1-year daily OHLCV candles from Yahoo Finance for an NSE symbol.
-   * Returns null if the symbol is not found or data is insufficient.
+   * Fetch daily OHLCV candles from Yahoo Finance for an NSE symbol.
+   * Tries SYMBOL.NS first, then SYMBOL.BO as fallback.
+   * Returns null only if both fail or data is insufficient.
    */
   const fetchRealOHLCV = async (symbol: string): Promise<UltraQuantCandle[] | null> => {
     const cached = realOHLCVCache.get(symbol);
     if (cached && cached.expiresAt > Date.now()) return cached.candles;
 
-    try {
-      const encoded = encodeURIComponent(`${symbol}.NS`);
-      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?interval=1d&range=2y`;
-      const resp = await axios.get(url, {
-        timeout: 10000,
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-      });
-      const result = resp.data?.chart?.result?.[0];
-      if (!result) return null;
+    const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
 
-      // Validate symbol match to avoid Yahoo returning wrong instrument
-      const returnedSym: string = (result.meta?.symbol ?? '').toUpperCase().replace('.NS', '');
-      if (returnedSym && returnedSym !== symbol.toUpperCase()) return null;
+    // Build list of Yahoo tickers to try in order
+    const override = YAHOO_SYMBOL_OVERRIDES[symbol.toUpperCase()];
+    const tickers = override
+      ? [override, `${symbol}.NS`, `${symbol}.BO`]
+      : [`${symbol}.NS`, `${symbol}.BO`];
 
-      const timestamps: number[] = result.timestamp ?? [];
-      const q = result.indicators?.quote?.[0];
-      if (!q || timestamps.length < 60) return null;
+    for (const ticker of tickers) {
+      try {
+        const encoded = encodeURIComponent(ticker);
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?interval=1d&range=2y`;
+        const resp = await axios.get(url, { timeout: 8000, headers: { 'User-Agent': UA } });
+        const result = resp.data?.chart?.result?.[0];
+        if (!result) continue;
 
-      const candles: UltraQuantCandle[] = [];
-      for (let i = 0; i < timestamps.length; i++) {
-        const o = q.open?.[i], h = q.high?.[i], l = q.low?.[i], c = q.close?.[i], v = q.volume?.[i];
-        if (o == null || h == null || l == null || c == null || c <= 0) continue;
-        candles.push({ open: o, high: h, low: l, close: c, volume: v ?? 0 });
+        // Validate: returned symbol base must match requested symbol
+        const returnedBase = (result.meta?.symbol ?? '').toUpperCase().replace(/\.(NS|BO)$/, '');
+        const requestedBase = symbol.toUpperCase().replace(/\.(NS|BO)$/, '');
+        if (returnedBase && returnedBase !== requestedBase) continue;
+
+        const timestamps: number[] = result.timestamp ?? [];
+        const q = result.indicators?.quote?.[0];
+        if (!q || timestamps.length < 60) continue;
+
+        const candles: UltraQuantCandle[] = [];
+        for (let i = 0; i < timestamps.length; i++) {
+          const o = q.open?.[i], h = q.high?.[i], l = q.low?.[i], c = q.close?.[i], v = q.volume?.[i];
+          if (o == null || h == null || l == null || c == null || c <= 0) continue;
+          candles.push({ open: o, high: h, low: l, close: c, volume: v ?? 0 });
+        }
+        if (candles.length < 60) continue;
+
+        realOHLCVCache.set(symbol, { candles, expiresAt: Date.now() + 60 * 60_000 });
+        return candles;
+      } catch (_e) {
+        continue; // try next ticker
       }
-
-      if (candles.length < 60) return null;
-
-      realOHLCVCache.set(symbol, { candles, expiresAt: Date.now() + 60 * 60_000 });
-      return candles;
-    } catch (_e) {
-      return null;
     }
+
+    return null; // all tickers failed
   };
 
   const analyzeUltraQuantProfile = (profile: UltraQuantProfile, request: ReturnType<typeof normalizeUltraQuantRequest>, realCandles?: UltraQuantCandle[] | null) => {
@@ -1212,55 +1235,45 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
 
   /**
    * Fetch a single Yahoo Finance quote.
-   * Validates that the returned symbol actually matches what we requested
-   * (prevents Yahoo returning Nifty/index data for unknown symbols).
+   * Tries SYMBOL.NS first, then SYMBOL.BO as fallback.
+   * Validates that the returned symbol matches what we requested.
    */
   const fetchYahooQuote = async (symbol: string): Promise<{ price: number; changePct: number } | null> => {
-    try {
-      const encoded = encodeURIComponent(symbol);
-      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?interval=1d&range=1d`;
-      const resp = await axios.get(url, {
-        timeout: 8000,
-        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
-      });
-      const result = resp.data?.chart?.result?.[0];
-      const meta = result?.meta;
-      if (!meta) return null;
+    const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
+    const tickers = [`${symbol}.NS`, `${symbol}.BO`];
 
-      // Validate: returned symbol must loosely match what we asked for.
-      // Yahoo sometimes returns index/ETF data for unknown NSE symbols.
-      const returnedSym: string = (meta.symbol ?? '').toUpperCase();
-      const requestedSym: string = symbol.toUpperCase().replace('.NS', '');
-      if (returnedSym && !returnedSym.includes(requestedSym) && !requestedSym.includes(returnedSym.replace('.NS', ''))) {
-        return null; // mismatch — Yahoo returned wrong instrument
+    for (const ticker of tickers) {
+      try {
+        const encoded = encodeURIComponent(ticker);
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?interval=1d&range=1d`;
+        const resp = await axios.get(url, { timeout: 8000, headers: { 'User-Agent': UA } });
+        const result = resp.data?.chart?.result?.[0];
+        const meta = result?.meta;
+        if (!meta) continue;
+
+        const returnedBase = (meta.symbol ?? '').toUpperCase().replace(/\.(NS|BO)$/, '');
+        const requestedBase = symbol.toUpperCase().replace(/\.(NS|BO)$/, '');
+        if (returnedBase && returnedBase !== requestedBase) continue;
+
+        const price = meta.regularMarketPrice ?? meta.chartPreviousClose ?? 0;
+        if (price <= 0) continue;
+
+        return { price, changePct: meta.regularMarketChangePercent ?? 0 };
+      } catch (_e) {
+        continue;
       }
-
-      const price = meta.regularMarketPrice ?? meta.chartPreviousClose ?? 0;
-      if (price <= 0) return null;
-
-      return {
-        price,
-        changePct: meta.regularMarketChangePercent ?? 0,
-      };
-    } catch (_e) {
-      return null;
     }
+    return null;
   };
 
   // Per-symbol TTL cache — keyed by NSE symbol, expires per entry
   const perSymbolPriceCache = new Map<string, { price: number; changePct: number; expiresAt: number }>();
 
-  /**
-   * Fetch real NSE prices for a list of symbols via Yahoo Finance (.NS suffix).
-   * Uses a per-symbol cache so stale entries for one stock don't block others.
-   * Batches requests with a small delay between chunks to avoid rate limiting.
-   */
   const fetchRealPricesForSymbols = async (symbols: string[]): Promise<Map<string, { price: number; changePct: number }>> => {
     const now = Date.now();
     const ttl = isMarketDay() ? 5 * 60_000 : 60 * 60_000;
     const result = new Map<string, { price: number; changePct: number }>();
 
-    // Separate symbols into cached vs needs-fetch
     const toFetch: string[] = [];
     for (const sym of symbols) {
       const cached = perSymbolPriceCache.get(sym);
@@ -1273,24 +1286,15 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
 
     if (toFetch.length === 0) return result;
 
-    // Fetch in small batches with delay to avoid Yahoo rate limiting
-    const BATCH = 5;
-    const DELAY_MS = 200;
-    for (let i = 0; i < toFetch.length; i += BATCH) {
-      const chunk = toFetch.slice(i, i + BATCH);
-      await Promise.all(chunk.map(async sym => {
-        const q = await fetchYahooQuote(`${sym}.NS`).catch(() => null);
-        if (q && q.price > 0) {
-          perSymbolPriceCache.set(sym, { ...q, expiresAt: now + ttl });
-          result.set(sym, q);
-        }
-      }));
-      if (i + BATCH < toFetch.length) {
-        await new Promise(r => setTimeout(r, DELAY_MS));
+    await Promise.all(toFetch.map(async sym => {
+      const q = await fetchYahooQuote(sym).catch(() => null);
+      if (q && q.price > 0) {
+        perSymbolPriceCache.set(sym, { ...q, expiresAt: now + ttl });
+        result.set(sym, q);
       }
-    }
+    }));
 
-    logAction('real-prices.fetched', { fetched: toFetch.length, cached: symbols.length - toFetch.length, resolved: result.size });
+    logAction('real-prices.fetched', { fetched: toFetch.length, resolved: result.size });
     return result;
   };
 
