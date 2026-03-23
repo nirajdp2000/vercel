@@ -601,7 +601,15 @@ const MultibaggerScanner: React.FC = () => {
                             <span className="text-zinc-700">—</span>
                           )}
                         </td>
-                        <td className="px-4 py-3 font-bold text-white">{cleanSymbol(stock.symbol)}</td>
+                        <td className="px-4 py-3 font-bold text-white">
+                          <div className="flex items-center gap-1.5">
+                            {cleanSymbol(stock.symbol)}
+                            {(stock as any).dataSource === 'real'
+                              ? <span className="text-[8px] font-black px-1 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 tracking-widest">LIVE</span>
+                              : <span className="text-[8px] font-black px-1 py-0.5 rounded bg-zinc-700/40 text-zinc-500 border border-zinc-600/30 tracking-widest">SIM</span>
+                            }
+                          </div>
+                        </td>
                         <td className="px-4 py-3 text-zinc-300 max-w-[9rem] truncate text-xs">{stock.companyName}</td>
                         <td className="px-4 py-3 text-zinc-400 text-xs uppercase tracking-[0.12em]">{stock.sector}</td>
                         <td className="px-4 py-3">

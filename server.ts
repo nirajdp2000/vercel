@@ -1034,6 +1034,7 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
       industry: profile.industry,
       marketCap: profile.marketCap,
       currentPrice: Number(endPrice.toFixed(2)), // real price when real candles used, synthetic fallback otherwise
+      dataSource: (realCandles && realCandles.length >= 60) ? 'real' : 'synthetic',
       cagr,
       momentum,
       trendStrength,
@@ -1310,18 +1311,13 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
         .map(r => r.symbol)
     );
 
-    // ── Pass 2: Fetch real OHLCV only for top 150 (parallel, ~15s max) ──
+    // ── Pass 2: Fetch real OHLCV only for top 150 (all parallel, ~3-4s) ──
     const realOHLCVMap = new Map<string, UltraQuantCandle[] | null>();
     const top150 = rawUniverse.filter(p => top150Symbols.has(p.symbol));
-    const OHLCV_BATCH = 10;
     await Promise.all(
-      Array.from({ length: Math.ceil(top150.length / OHLCV_BATCH) }, (_, bi) =>
-        Promise.all(
-          top150.slice(bi * OHLCV_BATCH, (bi + 1) * OHLCV_BATCH).map(async p => {
-            realOHLCVMap.set(p.symbol, await fetchRealOHLCV(p.symbol).catch(() => null));
-          })
-        )
-      )
+      top150.map(async p => {
+        realOHLCVMap.set(p.symbol, await fetchRealOHLCV(p.symbol).catch(() => null));
+      })
     );
 
     // ── Pass 3: Re-score top 150 with real data, keep rest as synthetic ──
@@ -3634,18 +3630,13 @@ Respond ONLY with this JSON structure (fill every field):
         .map(x => x.symbol)
     );
 
-    // ── Pass 2: Fetch real OHLCV only for top 150 (parallel) ──
+    // ── Pass 2: Fetch real OHLCV only for top 150 (all parallel, ~3-4s) ──
     const mbRealOHLCVMap = new Map<string, UltraQuantCandle[] | null>();
     const mbTop150 = universe.filter(p => top150MBSymbols.has(p.symbol));
-    const MB_OHLCV_BATCH = 10;
     await Promise.all(
-      Array.from({ length: Math.ceil(mbTop150.length / MB_OHLCV_BATCH) }, (_, bi) =>
-        Promise.all(
-          mbTop150.slice(bi * MB_OHLCV_BATCH, (bi + 1) * MB_OHLCV_BATCH).map(async p => {
-            mbRealOHLCVMap.set(p.symbol, await fetchRealOHLCV(p.symbol).catch(() => null));
-          })
-        )
-      )
+      mbTop150.map(async p => {
+        mbRealOHLCVMap.set(p.symbol, await fetchRealOHLCV(p.symbol).catch(() => null));
+      })
     );
 
     // Step 1: Build price/volume series — real data for top 150, synthetic for rest
@@ -3700,6 +3691,7 @@ Respond ONLY with this JSON structure (fill every field):
         symbol:           profile.symbol,
         companyName:      MB_COMPANY_NAMES[profile.symbol] ?? `${profile.symbol} Ltd`,
         sector:           profile.sector,
+        dataSource:       (mbRealOHLCVMap.get(profile.symbol) ?? null) ? 'real' : 'synthetic',
         currentPrice:     Number(seriesCache[i].closes[seriesCache[i].closes.length - 1].toFixed(2)),
         bullishScore:     Number(bullishScore.toFixed(2)),
         trendScore:       Number(trend.toFixed(2)),

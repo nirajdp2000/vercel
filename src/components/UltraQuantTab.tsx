@@ -524,6 +524,10 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
                         <div className="flex items-center gap-1.5">
                           <p className="text-[12px] font-black text-white">{cleanSymbol(stock.symbol)}</p>
                           <CagrBadge cagr={stock.cagr} />
+                          {(stock as any).dataSource === 'real'
+                            ? <span className="text-[8px] font-black px-1 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 tracking-widest">LIVE</span>
+                            : <span className="text-[8px] font-black px-1 py-0.5 rounded bg-zinc-700/40 text-zinc-500 border border-zinc-600/30 tracking-widest">SIM</span>
+                          }
                         </div>
                         <p className="text-[9px] text-zinc-500">{stock.sector}</p>
                       </div>
