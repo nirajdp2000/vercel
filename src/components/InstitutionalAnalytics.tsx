@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import Markdown from 'react-markdown';
@@ -36,6 +36,15 @@ interface InstitutionalAnalyticsProps {
 }
 
 type TabId = 'order-flow' | 'volume-profile' | 'microstructure' | 'sector-rotation' | 'sentiment';
+
+const DEFAULT_STOCKS = [
+  { symbol: 'RELIANCE', key: 'NSE_EQ|INE002A01018', label: 'Reliance' },
+  { symbol: 'HDFCBANK', key: 'NSE_EQ|INE040A01034', label: 'HDFC Bank' },
+  { symbol: 'INFY',     key: 'NSE_EQ|INE009A01021', label: 'Infosys' },
+  { symbol: 'TCS',      key: 'NSE_EQ|INE467B01029', label: 'TCS' },
+  { symbol: 'ICICIBANK',key: 'NSE_EQ|INE090A01021', label: 'ICICI Bank' },
+];
+
 
 const emptyVolumeProfile = {
   profile: [] as VolumeProfileNode[],
@@ -283,6 +292,41 @@ export const InstitutionalAnalytics: React.FC<InstitutionalAnalyticsProps> = ({
   const [sentimentScore, setSentimentScore] = useState(72);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  // Self-contained stock selector — used when no stock is selected on Analytics tab
+  const [selfStock, setSelfStock] = useState(DEFAULT_STOCKS[0]);
+  const [selfCandles, setSelfCandles] = useState<Array<{ close: number; volume: number }>>([]);
+  const [selfLoading, setSelfLoading] = useState(false);
+
+  // Effective values: prefer prop candles/symbol, fall back to self-fetched
+  const effectiveCandles = candles.length > 0 ? candles : selfCandles;
+  const effectiveSymbol  = candles.length > 0 ? symbol : selfStock.symbol;
+  const effectiveKey     = candles.length > 0 ? instrumentKey : selfStock.key;
+
+  // Auto-fetch candles for the self-selected stock when prop candles are absent
+  const fetchSelfCandles = useCallback(async (stock: typeof DEFAULT_STOCKS[0]) => {
+    setSelfLoading(true);
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const from  = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const url   = `/api/stocks/historical?instrumentKey=${encodeURIComponent(stock.key)}&interval=day&fromDate=${from}&toDate=${today}`;
+      const resp  = await fetchJson<{ candles: Array<[string, number, number, number, number, number]> }>(url);
+      if (resp?.candles?.length) {
+        setSelfCandles(resp.candles.map(c => ({ close: c[4], volume: c[5] })));
+      }
+    } catch (_e) {
+      // silently ignore — will show empty state
+    } finally {
+      setSelfLoading(false);
+    }
+  }, []);
+
+  // Fetch on mount and whenever selfStock changes (only when prop candles are absent)
+  useEffect(() => {
+    if (candles.length === 0) {
+      fetchSelfCandles(selfStock);
+    }
+  }, [selfStock, candles.length, fetchSelfCandles]);
+
   const isLight = theme === 'light';
   const shellClass = isLight
     ? 'bg-white/90 border border-zinc-200 text-zinc-900 shadow-[0_30px_90px_rgba(15,23,42,0.12)]'
@@ -297,7 +341,7 @@ export const InstitutionalAnalytics: React.FC<InstitutionalAnalyticsProps> = ({
   const softClass = isLight ? 'text-zinc-600' : 'text-white/40';
 
   useEffect(() => {
-    if (!candles.length) {
+    if (!effectiveCandles.length) {
       setOrderBook({ bids: [], asks: [] });
       setImbalanceData(null);
       setVolumeProfile(emptyVolumeProfile);
@@ -305,14 +349,14 @@ export const InstitutionalAnalytics: React.FC<InstitutionalAnalyticsProps> = ({
     }
 
     let active = true;
-    const lastPrice = candles[candles.length - 1].close;
+    const lastPrice = effectiveCandles[effectiveCandles.length - 1].close;
 
     const loadOrderFlow = async () => {
       try {
-        const ikParam = instrumentKey ? `&instrumentKey=${encodeURIComponent(instrumentKey)}` : '';
+        const ikParam = effectiveKey ? `&instrumentKey=${encodeURIComponent(effectiveKey)}` : '';
         const [book, profile, micro, rotation] = await Promise.all([
           fetchJson<OrderBook>(`/api/institutional/order-book?lastPrice=${lastPrice}${ikParam}`),
-          InstitutionalService.calculateVolumeProfile(candles, 2),
+          InstitutionalService.calculateVolumeProfile(effectiveCandles, 2),
           fetchJson<{ frequency: number; spread: number; accumulation: number }>(`/api/institutional/microstructure?lastPrice=${lastPrice}${ikParam}`),
           InstitutionalService.getSectorRotation()
         ]);
@@ -340,7 +384,7 @@ export const InstitutionalAnalytics: React.FC<InstitutionalAnalyticsProps> = ({
       active = false;
       window.clearInterval(intervalId);
     };
-  }, [candles, symbol]);
+  }, [effectiveCandles.length, effectiveSymbol, effectiveKey]);
 
   const derived = useMemo(() => {
     const bestBid = orderBook.bids[0]?.price ?? 0;
@@ -370,7 +414,7 @@ export const InstitutionalAnalytics: React.FC<InstitutionalAnalyticsProps> = ({
   ];
 
   const heatmapData = [...orderBook.bids, ...orderBook.asks].sort((left, right) => left.price - right.price);
-  const canAnalyze = Boolean(onAnalyze && candles.length > 0);
+  const canAnalyze = Boolean(onAnalyze && effectiveCandles.length > 0);
 
   return (
     <div className={`overflow-hidden rounded-[2rem] ${shellClass}`}>
@@ -397,8 +441,28 @@ export const InstitutionalAnalytics: React.FC<InstitutionalAnalyticsProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            {/* Stock selector — only shown when no stock is selected on Analytics tab */}
+            {candles.length === 0 && (
+              <select
+                value={selfStock.symbol}
+                onChange={e => {
+                  const s = DEFAULT_STOCKS.find(d => d.symbol === e.target.value) ?? DEFAULT_STOCKS[0];
+                  setSelfStock(s);
+                }}
+                className={`rounded-xl px-3 py-2 text-[11px] font-black uppercase tracking-[0.15em] border outline-none cursor-pointer ${
+                  isLight
+                    ? 'bg-white border-zinc-300 text-zinc-800'
+                    : 'bg-white/5 border-white/10 text-white'
+                }`}
+              >
+                {DEFAULT_STOCKS.map(s => (
+                  <option key={s.symbol} value={s.symbol}>{s.label}</option>
+                ))}
+              </select>
+            )}
             <div className={`rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] ${isLight ? 'bg-cyan-100 text-cyan-700' : 'bg-cyan-500/10 text-cyan-300'}`}>
-              {symbol} Desk
+              {effectiveSymbol} Desk
+              {selfLoading && <span className="ml-1 opacity-60">…</span>}
             </div>
             <button
               onClick={onAnalyze}
@@ -411,9 +475,9 @@ export const InstitutionalAnalytics: React.FC<InstitutionalAnalyticsProps> = ({
           </div>
         </div>
 
-        {!canAnalyze && (
+        {selfLoading && (
           <div className={`mt-4 rounded-2xl px-4 py-3 text-[11px] font-bold ${isLight ? 'bg-zinc-100 text-zinc-700' : 'bg-white/5 text-zinc-400'}`}>
-            Load a stock and fetch historical candles from the Analytics tab to enable AI Deep Scan.
+            Loading {selfStock.label} data…
           </div>
         )}
 
@@ -568,7 +632,7 @@ export const InstitutionalAnalytics: React.FC<InstitutionalAnalyticsProps> = ({
                       <Tooltip contentStyle={{ backgroundColor: isLight ? '#ffffff' : '#111827', border: `1px solid ${isLight ? '#e4e4e7' : 'rgba(255,255,255,0.1)'}`, borderRadius: '12px' }} />
                       <Bar dataKey="volume" radius={[0, 6, 6, 0]}>
                         {heatmapData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.price <= (candles[candles.length - 1]?.close ?? 0) ? '#10b981' : '#f43f5e'} fillOpacity={0.32} />
+                          <Cell key={`cell-${index}`} fill={entry.price <= (effectiveCandles[effectiveCandles.length - 1]?.close ?? 0) ? '#10b981' : '#f43f5e'} fillOpacity={0.32} />
                         ))}
                       </Bar>
                     </BarChart>
@@ -595,7 +659,7 @@ export const InstitutionalAnalytics: React.FC<InstitutionalAnalyticsProps> = ({
                 </div>
                 <div className={`rounded-2xl p-4 ${panelClass}`}>
                   <p className={`text-[10px] font-bold uppercase tracking-[0.2em] ${softClass}`}>Auction</p>
-                  <p className="mt-2 text-sm font-black text-cyan-400">{(candles[candles.length - 1]?.close ?? 0) >= volumeProfile.val && (candles[candles.length - 1]?.close ?? 0) <= volumeProfile.vah ? 'Inside Value' : 'Outside Value'}</p>
+                  <p className="mt-2 text-sm font-black text-cyan-400">{(effectiveCandles[effectiveCandles.length - 1]?.close ?? 0) >= volumeProfile.val && (effectiveCandles[effectiveCandles.length - 1]?.close ?? 0) <= volumeProfile.vah ? 'Inside Value' : 'Outside Value'}</p>
                 </div>
               </div>
 

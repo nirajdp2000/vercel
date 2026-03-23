@@ -1,13 +1,10 @@
-fix: live price now streams every second regardless of timeframe via Yahoo Finance
+feat: Institutional tab self-contained — auto-loads default stock, no Analytics tab required
 
-Root cause: SSE stream used Upstox v2 LTP endpoint which returned 401 (token
-lacks market-data-feed scope). Price showed "LAST CLOSE" instead of live.
-
-Changes:
-- SSE now tries Upstox v3/market-quote/ltp first (same token scope as historical)
-- On any Upstox failure, falls back to Yahoo Finance (SYMBOL.NS) — no auth needed
-- SSE endpoint accepts ?symbol=HDFCBANK param for Yahoo fallback lookup
-- App.tsx passes selectedStock.symbol in SSE URL
-- Change/changePercent computed from cp (previous close) in v3 response
-- Verified: HDFCBANK ticks at 751.65 every second, source=yahoo, -3.69% change
-- Price display is now timeframe-independent (SSE is separate from chart data)
+- Added DEFAULT_STOCKS list (Reliance, HDFC Bank, Infosys, TCS, ICICI Bank)
+- Added selfStock/selfCandles/selfLoading state inside InstitutionalAnalytics
+- Auto-fetches 30-day daily candles for selected stock on mount when prop candles absent
+- Stock selector dropdown shown in header when no stock selected on Analytics tab
+- effectiveCandles/effectiveSymbol/effectiveKey derived: prop values take priority, self-fetched as fallback
+- All internal logic (useEffect, derived, heatmap, volume profile) uses effectiveCandles
+- Loading indicator shown while self-fetching
+- canAnalyze now works with effectiveCandles so AI Deep Scan enabled after self-fetch
