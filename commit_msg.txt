@@ -1,6 +1,4 @@
-perf: load all OHLCV from Supabase before pre-sort (Pass 0)
+fix: cap Pass 0 Supabase query to top 200 symbols by marketCap
 
-- Pass 0 runs one Supabase query for all symbols before pre-sort
-- Ensures real-data bonus in Pass 1 works correctly on cold start
-- Removes redundant Pass 2b (already covered by Pass 0)
-- Both UltraQuant and Multibagger now show real prices on first request
+Querying all 5000+ universe symbols caused Vercel timeout.
+Now only queries top 200 (the ones EOD batch refreshes) — fast and sufficient.

@@ -1610,11 +1610,13 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
     const rawUniverse = createUltraQuantUniverse();
     const totalLoaded = rawUniverse.length;
 
-    // ── Pass 0: Pre-load ALL OHLCV from Supabase on cold start (one query, ~50ms) ──
+    // ── Pass 0: Pre-load OHLCV from Supabase on cold start (one query, ~50ms) ──
+    // Only query top 200 by marketCap — these are the symbols refreshed by EOD batch.
     // Must happen before Pass 1 so the real-data bonus in pre-sort works correctly.
-    const allSymbols = rawUniverse.map(p => p.symbol);
-    const coldSymbols = allSymbols.filter(s => !(realOHLCVCache.get(s)?.expiresAt ?? 0 > Date.now()));
-    if (coldSymbols.length > allSymbols.length * 0.5) {
+    const top200Symbols = rawUniverse
+      .slice().sort((a, b) => b.marketCap - a.marketCap).slice(0, 200).map(p => p.symbol);
+    const coldSymbols = top200Symbols.filter(s => !(realOHLCVCache.get(s)?.expiresAt ?? 0 > Date.now()));
+    if (coldSymbols.length > 10) {
       await Promise.race([
         loadOHLCVFromSupabase(coldSymbols, setOHLCVCache),
         new Promise<void>(r => setTimeout(r, 2000)),
@@ -4014,10 +4016,12 @@ Respond ONLY with this JSON structure (fill every field):
     const weights  = MB_CYCLE_WEIGHTS[cycleDays];
     const fullUniverse = createUltraQuantUniverse();
 
-    // ── Pass 0: Pre-load ALL OHLCV from Supabase on cold start (one query, ~50ms) ──
-    const mbAllSymbols = fullUniverse.map(p => p.symbol);
-    const mbColdSymbols = mbAllSymbols.filter(s => !(realOHLCVCache.get(s)?.expiresAt ?? 0 > Date.now()));
-    if (mbColdSymbols.length > mbAllSymbols.length * 0.5) {
+    // ── Pass 0: Pre-load OHLCV from Supabase on cold start (one query, ~50ms) ──
+    // Only query top 200 by marketCap — these are the symbols refreshed by EOD batch.
+    const mbTop200Symbols = fullUniverse
+      .slice().sort((a, b) => b.marketCap - a.marketCap).slice(0, 200).map(p => p.symbol);
+    const mbColdSymbols = mbTop200Symbols.filter(s => !(realOHLCVCache.get(s)?.expiresAt ?? 0 > Date.now()));
+    if (mbColdSymbols.length > 10) {
       await Promise.race([
         loadOHLCVFromSupabase(mbColdSymbols, setOHLCVCache),
         new Promise<void>(r => setTimeout(r, 2000)),
