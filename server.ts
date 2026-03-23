@@ -16,7 +16,7 @@ import { OrbVwapEngine } from "./src/services/upstox/OrbVwapEngine";
 import { PredictionStorageService } from "./src/services/PredictionStorageService";
 import { getSupabaseClient } from "./src/lib/supabase";
 import { fetchNewsIntelligence, getStockSentiment, getTopNews, getSectorSentiment } from "./src/services/NewsIntelligenceService";
-import { enrichStocksBackground, getEnrichedFromCache, fetchFIIDIIData, computeFundamentalScore, fetchYahooFundamentals, fetchScreenerFundamentals, isYahooCached, loadFundamentalsFromSupabase, type EnrichedStockData } from "./src/services/MarketDataAggregator";
+import { enrichStocksBackground, getEnrichedFromCache, fetchFIIDIIData, computeFundamentalScore, fetchYahooFundamentals, fetchScreenerFundamentals, isYahooCached, loadFundamentalsFromSupabase, loadOHLCVFromSupabase, writeOHLCVToSupabase, type EnrichedStockData, type OHLCVCandle } from "./src/services/MarketDataAggregator";
 import { runSuperbrain, type SuperbrainInput } from "./src/services/SuperbrainEngine";
 
 import path from "path";
@@ -909,7 +909,12 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
   // Per-symbol live price cache — populated by fetchRealOHLCV and fetchYahooQuote
   const perSymbolPriceCache = new Map<string, { price: number; changePct: number; expiresAt: number }>();
 
-  // Known Yahoo Finance symbol overrides (NSE symbol → Yahoo ticker)
+  // Setter passed to loadOHLCVFromSupabase — populates realOHLCVCache from Supabase rows
+  const setOHLCVCache = (symbol: string, candles: OHLCVCandle[], livePrice: number | null, changePct: number | null) => {
+    realOHLCVCache.set(symbol, { candles: candles as UltraQuantCandle[], livePrice, changePct, expiresAt: Date.now() + 60 * 60_000 });
+    if (livePrice) perSymbolPriceCache.set(symbol, { price: livePrice, changePct: changePct ?? 0, expiresAt: Date.now() + 60 * 60_000 });
+  };
+
   // Used when the default SYMBOL.NS returns 404
   const YAHOO_SYMBOL_OVERRIDES: Record<string, string> = {
     'TATAMOTORS':  'TATAMOTORS.BO',  // BSE fallback
@@ -1621,74 +1626,28 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
       realOHLCVMap.set(p.symbol, getOHLCVFromCache(p.symbol));
     });
 
-    // ── Pass 2b: Fetch full OHLCV (range=2y) for top symbols missing from cache ──
-    // fetchRealOHLCV gives candles + live price in one call → stock shows LIVE not SIM.
-    // Capped at 15 symbols inline; rest get warmed in background for next request.
+    // ── Pass 2b: Load OHLCV from Supabase (zero live HTTP — written by /api/admin/refresh-eod) ──
     const symbolsMissingOHLCV = top100Universe
       .map(p => p.symbol)
-      .filter(s => {
-        const ohlcv = realOHLCVCache.get(s);
-        return !(ohlcv && ohlcv.expiresAt > Date.now());
-      })
-      .slice(0, 15);
+      .filter(s => !(realOHLCVCache.get(s)?.expiresAt ?? 0 > Date.now()));
 
     if (symbolsMissingOHLCV.length > 0) {
       await Promise.race([
-        Promise.allSettled(symbolsMissingOHLCV.map(s => fetchRealOHLCV(s).catch(() => null))),
-        new Promise<void>(r => setTimeout(r, 4000)),
+        loadOHLCVFromSupabase(symbolsMissingOHLCV, setOHLCVCache),
+        new Promise<void>(r => setTimeout(r, 1500)),
       ]);
-      // Refresh realOHLCVMap with newly fetched data
+      // Refresh map with newly loaded data
       top100Universe.forEach(p => {
-        if (!realOHLCVMap.get(p.symbol)) {
-          realOHLCVMap.set(p.symbol, getOHLCVFromCache(p.symbol));
-        }
+        if (!realOHLCVMap.get(p.symbol)) realOHLCVMap.set(p.symbol, getOHLCVFromCache(p.symbol));
       });
     }
 
-    // Pass 2c: For any still missing price (OHLCV fetch failed), quick range=1d fallback
-    const symbolsStillMissingPrice = top100Universe
-      .map(p => p.symbol)
-      .filter(s => {
-        const cached = perSymbolPriceCache.get(s);
-        if (cached && cached.expiresAt > Date.now()) return false;
-        const ohlcv = realOHLCVCache.get(s);
-        return !(ohlcv && ohlcv.expiresAt > Date.now() && ohlcv.livePrice);
-      })
-      .slice(0, 10);
-
-    if (symbolsStillMissingPrice.length > 0) {
-      const ttl = isMarketDay() ? 5 * 60_000 : 60 * 60_000;
-      const now = Date.now();
-      await Promise.race([
-        Promise.allSettled(symbolsStillMissingPrice.map(async sym => {
-          const q = await fetchYahooQuote(sym).catch(() => null);
-          if (q && q.price > 0) {
-            perSymbolPriceCache.set(sym, { price: q.price, changePct: q.changePct, expiresAt: now + ttl });
-          }
-        })),
-        new Promise<void>(r => setTimeout(r, 2000)),
-      ]);
-    }
-
-    // ── Pass 3: Load fundamentals — Supabase first (~50ms), then Yahoo live for misses ──
-    // Supabase persists data across cold starts — eliminates per-symbol live fetching.
-    // Yahoo live fetch only runs for symbols not in Supabase (first time ever seen).
+    // ── Pass 3: Load fundamentals from Supabase only (no live Yahoo calls) ──
     const top50Symbols = preSorted.slice(0, 50).map(r => r.symbol);
-
-    // Step 3a: Batch read from Supabase (one query, all symbols, ~50ms)
     await Promise.race([
       loadFundamentalsFromSupabase(top50Symbols),
       new Promise<void>(r => setTimeout(r, 1500)),
     ]);
-
-    // Step 3b: Yahoo live fetch only for symbols still missing after Supabase read
-    const top10Uncached = top50Symbols.filter(s => !isYahooCached(s)).slice(0, 10);
-    if (top10Uncached.length > 0) {
-      await Promise.race([
-        Promise.allSettled(top10Uncached.map(s => fetchYahooFundamentals(s))),
-        new Promise<void>(r => setTimeout(r, 2500)),
-      ]);
-    }
 
     const enrichedMap = new Map<string, EnrichedStockData>(
       top50Symbols.map(s => [s, getEnrichedFromCache(s)])
@@ -4066,65 +4025,27 @@ Respond ONLY with this JSON structure (fill every field):
       mbRealOHLCVMap.set(p.symbol, getOHLCVFromCache(p.symbol));
     });
 
-    // ── Pass 2b: Fetch full OHLCV (range=2y) for top symbols missing from cache ──
+    // ── Pass 2b: Load OHLCV from Supabase (zero live HTTP) ──
     const mbSymbolsMissingOHLCV = universe
       .map(p => p.symbol)
-      .filter(s => {
-        const ohlcv = realOHLCVCache.get(s);
-        return !(ohlcv && ohlcv.expiresAt > Date.now());
-      })
-      .slice(0, 15);
+      .filter(s => !(realOHLCVCache.get(s)?.expiresAt ?? 0 > Date.now()));
 
     if (mbSymbolsMissingOHLCV.length > 0) {
       await Promise.race([
-        Promise.allSettled(mbSymbolsMissingOHLCV.map(s => fetchRealOHLCV(s).catch(() => null))),
-        new Promise<void>(r => setTimeout(r, 4000)),
+        loadOHLCVFromSupabase(mbSymbolsMissingOHLCV, setOHLCVCache),
+        new Promise<void>(r => setTimeout(r, 1500)),
       ]);
       universe.forEach(p => {
-        if (!mbRealOHLCVMap.get(p.symbol)) {
-          mbRealOHLCVMap.set(p.symbol, getOHLCVFromCache(p.symbol));
-        }
+        if (!mbRealOHLCVMap.get(p.symbol)) mbRealOHLCVMap.set(p.symbol, getOHLCVFromCache(p.symbol));
       });
     }
 
-    // Pass 2c: Quick price fallback for any still missing
-    const mbSymbolsStillMissingPrice = universe
-      .map(p => p.symbol)
-      .filter(s => {
-        const cached = perSymbolPriceCache.get(s);
-        if (cached && cached.expiresAt > Date.now()) return false;
-        const ohlcv = realOHLCVCache.get(s);
-        return !(ohlcv && ohlcv.expiresAt > Date.now() && ohlcv.livePrice);
-      })
-      .slice(0, 10);
-
-    if (mbSymbolsStillMissingPrice.length > 0) {
-      const ttl = isMarketDay() ? 5 * 60_000 : 60 * 60_000;
-      const now = Date.now();
-      await Promise.race([
-        Promise.allSettled(mbSymbolsStillMissingPrice.map(async sym => {
-          const q = await fetchYahooQuote(sym).catch(() => null);
-          if (q && q.price > 0) {
-            perSymbolPriceCache.set(sym, { price: q.price, changePct: q.changePct, expiresAt: now + ttl });
-          }
-        })),
-        new Promise<void>(r => setTimeout(r, 2000)),
-      ]);
-    }
-
-    // ── Pass 3: Load fundamentals — Supabase first, then Yahoo for misses ──
+    // ── Pass 3: Load fundamentals from Supabase only ──
     const mbTop50Symbols = universe.slice(0, 50).map(p => p.symbol);
     await Promise.race([
       loadFundamentalsFromSupabase(mbTop50Symbols),
       new Promise<void>(r => setTimeout(r, 1500)),
     ]);
-    const mbTop10Uncached = mbTop50Symbols.filter(s => !isYahooCached(s)).slice(0, 10);
-    if (mbTop10Uncached.length > 0) {
-      await Promise.race([
-        Promise.allSettled(mbTop10Uncached.map(s => fetchYahooFundamentals(s))),
-        new Promise<void>(r => setTimeout(r, 2500)),
-      ]);
-    }
     const mbEnrichedMap = new Map<string, EnrichedStockData>(
       mbTop50Symbols.map(s => [s, getEnrichedFromCache(s)])
     );
@@ -4358,6 +4279,89 @@ Respond ONLY with this JSON structure (fill every field):
     const data = await fetchFIIDIIData().catch(() => null);
     if (!data) return res.status(503).json({ error: 'FII/DII data unavailable' });
     res.json(data);
+  });
+
+  /**
+   * POST /api/admin/refresh-eod
+   * Evening batch job — fetches OHLCV + fundamentals for top N symbols and writes to Supabase.
+   * Call this once per day (e.g. 4:30 PM IST after market close) via cron or manually.
+   * Scan pipeline reads from Supabase only — zero live Yahoo calls during normal scans.
+   *
+   * Optional body: { symbols: string[], secret: string }
+   * secret must match ADMIN_SECRET env var (or 'stockpulse-eod' default) to prevent abuse.
+   */
+  app.post("/api/admin/refresh-eod", async (req, res) => {
+    const secret = String(req.body?.secret ?? req.headers['x-admin-secret'] ?? '');
+    const expectedSecret = process.env.ADMIN_SECRET || 'stockpulse-eod';
+    if (secret !== expectedSecret) return res.status(401).json({ error: 'Unauthorized' });
+
+    const startTime = Date.now();
+    const universe = createUltraQuantUniverse();
+
+    // Use provided symbols or default to top 150 by marketCap
+    const rawSymbols: string[] = Array.isArray(req.body?.symbols) && req.body.symbols.length > 0
+      ? req.body.symbols.map((s: any) => String(s).toUpperCase().trim())
+      : universe.sort((a, b) => b.marketCap - a.marketCap).slice(0, 150).map(p => p.symbol);
+
+    const symbols = [...new Set(rawSymbols)]; // dedupe
+    const results = { total: symbols.length, ohlcvOk: 0, ohlcvFail: 0, fundOk: 0, fundFail: 0 };
+
+    console.log(`[EOD Refresh] Starting for ${symbols.length} symbols`);
+
+    // ── Batch 1: OHLCV (range=2y) — 10 at a time with 500ms gap ──
+    const OHLCV_BATCH = 10;
+    for (let i = 0; i < symbols.length; i += OHLCV_BATCH) {
+      const batch = symbols.slice(i, i + OHLCV_BATCH);
+      await Promise.allSettled(batch.map(async sym => {
+        try {
+          const candles = await fetchRealOHLCV(sym);
+          if (candles && candles.length >= 60) {
+            const cached = realOHLCVCache.get(sym);
+            await writeOHLCVToSupabase(sym, candles, cached?.livePrice ?? null, cached?.changePct ?? null);
+            results.ohlcvOk++;
+          } else {
+            results.ohlcvFail++;
+          }
+        } catch (_e) { results.ohlcvFail++; }
+      }));
+      if (i + OHLCV_BATCH < symbols.length) await new Promise(r => setTimeout(r, 500));
+    }
+
+    // ── Batch 2: Yahoo fundamentals — 10 at a time ──
+    const FUND_BATCH = 10;
+    for (let i = 0; i < symbols.length; i += FUND_BATCH) {
+      const batch = symbols.slice(i, i + FUND_BATCH);
+      await Promise.allSettled(batch.map(async sym => {
+        try {
+          await fetchYahooFundamentals(sym);
+          results.fundOk++;
+        } catch (_e) { results.fundFail++; }
+      }));
+      if (i + FUND_BATCH < symbols.length) await new Promise(r => setTimeout(r, 300));
+    }
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`[EOD Refresh] Done in ${elapsed}s — OHLCV: ${results.ohlcvOk}ok/${results.ohlcvFail}fail, Fund: ${results.fundOk}ok/${results.fundFail}fail`);
+    logAction('eod_refresh.completed', { ...results, elapsedSec: elapsed });
+    res.json({ ok: true, elapsed: `${elapsed}s`, results });
+  });
+
+  /** GET /api/admin/refresh-eod/status — Check when last EOD refresh ran */
+  app.get("/api/admin/refresh-eod/status", async (req, res) => {
+    try {
+      const sb = getSupabaseClient();
+      if (!sb) return res.json({ lastRefresh: null, cachedSymbols: 0 });
+      const { data, error } = await sb
+        .from('ohlcv_cache')
+        .select('fetched_at')
+        .order('fetched_at', { ascending: false })
+        .limit(1);
+      const lastRefresh = (!error && data?.[0]) ? new Date(data[0].fetched_at).toISOString() : null;
+      const { count } = await sb.from('ohlcv_cache').select('symbol', { count: 'exact', head: true });
+      res.json({ lastRefresh, cachedSymbols: count ?? 0 });
+    } catch (_e) {
+      res.json({ lastRefresh: null, cachedSymbols: 0 });
+    }
   });
 
   app.post("/api/ultra-quant/scan", async (req, res) => {

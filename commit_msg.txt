@@ -1,13 +1,20 @@
-fix: stocks showing SIM/no-price — fetch full OHLCV (range=2y) in Pass 2b
+feat: EOD batch refresh — zero live HTTP during scans (CPU reduction)
 
-Root cause: Pass 2b was calling fetchYahooQuote (range=1d, ~5 candles)
-which only populated perSymbolPriceCache but NOT realOHLCVCache.
-fetchRealOHLCV requires >=60 candles, so realOHLCVMap stayed null
-→ dataSource='synthetic', price='—'.
+Architecture change:
+- Scan pipeline (buildUltraQuantDashboard + buildMultibaggerScan) now reads
+  OHLCV and fundamentals from Supabase ONLY — no live Yahoo/Screener calls
+- All live fetching moved to POST /api/admin/refresh-eod (call once at evening)
+- /api/stock/enrich still does live Screener fetch (lazy, on row expand only)
 
-Fix: Pass 2b now calls fetchRealOHLCV (range=2y) for top 15 symbols
-missing OHLCV. This gives full candles + live price in one call,
-populating both realOHLCVCache and perSymbolPriceCache.
-Pass 2c added as fallback: range=1d price-only for any still missing.
+New Supabase table: ohlcv_cache (symbol, candles JSONB, live_price, change_pct)
+New functions in MarketDataAggregator:
+  - loadOHLCVFromSupabase() — reads candles into realOHLCVCache
+  - writeOHLCVToSupabase() — writes candles from refresh-eod
 
-Same fix applied to buildMultibaggerScan.
+New endpoints:
+  POST /api/admin/refresh-eod  — fetches top 150 symbols OHLCV + fundamentals
+    body: { secret: "stockpulse-eod", symbols?: string[] }
+  GET  /api/admin/refresh-eod/status — shows last refresh time + cached count
+
+CPU impact: scan passes 2b/2c/3b removed (was 15+ live HTTP calls per scan)
+Now scan = 2 Supabase reads (~50ms each) + zero Yahoo calls

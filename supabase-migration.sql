@@ -1,6 +1,7 @@
 -- Run this once in the Supabase SQL Editor (https://supabase.com/dashboard/project/xtnubimeoawyjkvkkxaz/sql)
--- Creates the fundamentals_cache table used to persist ROE/ROCE/PE/52W data across Vercel cold starts
+-- Creates tables used to persist EOD data across Vercel cold starts
 
+-- 1. fundamentals_cache — ROE/ROCE/PE/52W/Promoter% per symbol
 CREATE TABLE IF NOT EXISTS fundamentals_cache (
   symbol            TEXT PRIMARY KEY,
   pe                NUMERIC,
@@ -20,7 +21,19 @@ CREATE TABLE IF NOT EXISTS fundamentals_cache (
   fetched_at        BIGINT NOT NULL DEFAULT (extract(epoch from now())*1000)::BIGINT
 );
 
--- Allow public read (anon key) and service-role write
 ALTER TABLE fundamentals_cache ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "public read"  ON fundamentals_cache FOR SELECT USING (true);
 CREATE POLICY "service write" ON fundamentals_cache FOR ALL USING (auth.role() = 'service_role');
+
+-- 2. ohlcv_cache — daily OHLCV candles (JSON array) per symbol
+CREATE TABLE IF NOT EXISTS ohlcv_cache (
+  symbol      TEXT PRIMARY KEY,
+  candles     JSONB NOT NULL DEFAULT '[]',
+  live_price  NUMERIC,
+  change_pct  NUMERIC,
+  fetched_at  BIGINT NOT NULL DEFAULT (extract(epoch from now())*1000)::BIGINT
+);
+
+ALTER TABLE ohlcv_cache ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "public read ohlcv"   ON ohlcv_cache FOR SELECT USING (true);
+CREATE POLICY "service write ohlcv" ON ohlcv_cache FOR ALL USING (auth.role() = 'service_role');

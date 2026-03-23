@@ -3,13 +3,13 @@
  *
  * Data priority (fastest → slowest):
  *  1. In-memory cache (module-level Map, survives warm Vercel instances)
- *  2. Supabase fundamentals_cache table (~50ms, persists across cold starts)
- *  3. Yahoo Finance v8 chart API (~200ms, proven working on Vercel)
- *  4. Screener.in HTML scraping (~1-2s, called lazily via /api/stock/enrich)
+ *  2. Supabase ohlcv_cache / fundamentals_cache (~50ms, persists across cold starts)
+ *  3. Yahoo Finance v8 chart API — only called from /api/admin/refresh-eod (evening batch)
+ *  4. Screener.in HTML scraping — only called from /api/stock/enrich (lazy on row expand)
  *
  * Design rules for Vercel (10s function timeout):
- *  - Supabase read replaces live scraping for cached fundamentals
- *  - After live fetch, data is written back to Supabase for next cold start
+ *  - Scan pipeline reads ONLY from in-memory cache → Supabase (zero live HTTP)
+ *  - /api/admin/refresh-eod fetches everything once per day and writes to Supabase
  *  - All HTTP timeouts hard-capped at 4s
  *  - Cache TTL: 1hr in-memory, 24hr in Supabase
  */
@@ -608,4 +608,70 @@ export function computeFundamentalScore(enriched: EnrichedStockData): number {
   }
 
   return Math.min(100, Math.max(0, score));
+}
+
+// ─── OHLCV Supabase cache helpers ─────────────────────────────────────────────
+// ohlcv_cache table stores daily candles as JSONB — written by /api/admin/refresh-eod
+// Read by scan pipeline on every request (zero live Yahoo calls during scans)
+
+let ohlcvTableMissing = false;
+
+export interface OHLCVCandle {
+  open: number; high: number; low: number; close: number; volume: number;
+}
+
+/**
+ * Load OHLCV candles from Supabase into realOHLCVCache (passed in from server.ts).
+ * Called once per scan — replaces all inline fetchRealOHLCV calls.
+ */
+export async function loadOHLCVFromSupabase(
+  symbols: string[],
+  setCache: (symbol: string, candles: OHLCVCandle[], livePrice: number | null, changePct: number | null) => void
+): Promise<void> {
+  if (ohlcvTableMissing || symbols.length === 0) return;
+  try {
+    const sb = getSupabaseClient();
+    if (!sb) return;
+    const cutoff = Date.now() - SUPABASE_TTL;
+    const { data, error } = await sb
+      .from('ohlcv_cache')
+      .select('symbol,candles,live_price,change_pct,fetched_at')
+      .in('symbol', symbols)
+      .gt('fetched_at', cutoff);
+    if (error) {
+      if (error.code === 'PGRST205') { ohlcvTableMissing = true; }
+      return;
+    }
+    if (!data) return;
+    for (const row of data) {
+      const candles: OHLCVCandle[] = Array.isArray(row.candles) ? row.candles : [];
+      if (candles.length >= 60) {
+        setCache(row.symbol, candles, row.live_price ?? null, row.change_pct ?? null);
+      }
+    }
+  } catch (_e) {}
+}
+
+/**
+ * Write OHLCV candles for one symbol to Supabase (called from refresh-eod endpoint).
+ */
+export async function writeOHLCVToSupabase(
+  symbol: string,
+  candles: OHLCVCandle[],
+  livePrice: number | null,
+  changePct: number | null
+): Promise<void> {
+  if (ohlcvTableMissing) return;
+  try {
+    const sb = getSupabaseClient();
+    if (!sb) return;
+    const { error } = await sb.from('ohlcv_cache').upsert({
+      symbol,
+      candles,
+      live_price: livePrice,
+      change_pct: changePct,
+      fetched_at: Date.now(),
+    }, { onConflict: 'symbol' });
+    if (error && error.code === 'PGRST205') ohlcvTableMissing = true;
+  } catch (_e) {}
 }
