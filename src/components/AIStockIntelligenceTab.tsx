@@ -60,6 +60,7 @@ interface StockIntelligenceResult {
   volumeSpikeConfirmed?: boolean;
   orbSignal?: 'EARLY_RALLY' | 'WATCH' | 'NONE';
   dataSource?: 'live' | 'synthetic';
+  priceSource?: 'live' | 'synthetic';
 }
 
 interface NewsItem {
@@ -238,10 +239,11 @@ function LiveTickerStrip({ rankings }: { rankings: StockIntelligenceResult[] }) 
 
 // ─── Summary KPI Bar ─────────────────────────────────────────────────────────
 
-function KPIBar({ summary, computedAt, aiPowered }: {
+function KPIBar({ summary, computedAt, aiPowered, liveCount }: {
   summary: Record<string, string | number>;
   computedAt: string;
   aiPowered?: boolean;
+  liveCount?: number;
 }) {
   const bias = summary.marketBias as string;
   const biasColor = bias === 'BULLISH' ? 'text-emerald-400' : bias === 'BEARISH' ? 'text-rose-400' : 'text-amber-400';
@@ -288,6 +290,11 @@ function KPIBar({ summary, computedAt, aiPowered }: {
         {aiPowered && (
           <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-violet-500/10 border border-violet-500/20 px-2.5 py-1 text-[8px] font-black text-violet-400 uppercase tracking-[0.1em]">
             <Brain size={9} /> AI Powered
+          </span>
+        )}
+        {liveCount !== undefined && liveCount > 0 && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 text-[8px] font-black text-emerald-400 uppercase tracking-[0.1em]">
+            <Activity size={9} /> {liveCount} Live Prices
           </span>
         )}
         <span className="text-[9px] text-white/20 font-mono ml-auto">
@@ -507,9 +514,14 @@ function RankingsTable({ data }: { data: StockIntelligenceResult[] }) {
                   </td>
                   {/* Chg% */}
                   <td className={`px-3 py-2.5 font-bold text-[11px] ${row.priceChangePercent >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                    <div className="flex items-center gap-0.5">
-                      {row.priceChangePercent >= 0 ? <ArrowUpRight size={11} /> : <ArrowDownRight size={11} />}
-                      {Math.abs(row.priceChangePercent).toFixed(2)}%
+                    <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-0.5">
+                        {row.priceChangePercent >= 0 ? <ArrowUpRight size={11} /> : <ArrowDownRight size={11} />}
+                        {Math.abs(row.priceChangePercent).toFixed(2)}%
+                      </div>
+                      {row.priceSource === 'live' && (
+                        <span className="text-[7px] font-black text-emerald-400/70 bg-emerald-500/10 rounded px-1 py-0.5 leading-none">LIVE</span>
+                      )}
                     </div>
                   </td>
                   {/* Vol */}
@@ -537,6 +549,18 @@ function RankingsTable({ data }: { data: StockIntelligenceResult[] }) {
                         <div>
                           <p className="text-white/30 uppercase tracking-[0.15em] mb-1">RL Action</p>
                           <p className="font-black text-white">{row.rlAction}</p>
+                        </div>
+                        <div>
+                          <p className="text-white/30 uppercase tracking-[0.15em] mb-1">
+                            Current Price
+                            {row.priceSource === 'live' && (
+                              <span className="ml-1 text-[7px] font-black text-emerald-400/70 bg-emerald-500/10 rounded px-1 py-0.5">LIVE</span>
+                            )}
+                          </p>
+                          <p className={`font-black ${row.priceChangePercent >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            ₹{row.currentPrice.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                            <span className="text-[9px] ml-1 opacity-70">{row.priceChangePercent >= 0 ? '+' : ''}{row.priceChangePercent.toFixed(2)}%</span>
+                          </p>
                         </div>
                         <div>
                           <p className="text-white/30 uppercase tracking-[0.15em] mb-1">Social Sentiment</p>
@@ -2952,7 +2976,8 @@ export default function AIStockIntelligenceTab() {
       <LiveTickerStrip rankings={dashboard.rankings} />
 
       {/* ── KPI Bar ── */}
-      <KPIBar summary={dashboard.summary} computedAt={dashboard.computedAt} aiPowered={dashboard.aiPowered} />
+      <KPIBar summary={dashboard.summary} computedAt={dashboard.computedAt} aiPowered={dashboard.aiPowered}
+        liveCount={dashboard.rankings?.filter((r: any) => r.priceSource === 'live').length} />
 
       {/* ── Panel Tabs ── */}
       <div className="flex flex-wrap gap-1 rounded-2xl border border-white/5 bg-white/[0.03] p-1">

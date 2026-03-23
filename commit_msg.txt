@@ -1,20 +1,26 @@
-feat: rankings history outcome tracker — compare predictions vs actual price after N trading days
+feat: inject real Yahoo Finance prices for top 50 NSE stocks in AI Intelligence tab
 
 server.ts:
-- New GET /api/rankings/history/outcomes/:date?horizon=5|10|20
-  - nTradingDaysAfter() skips weekends + NSE holidays correctly
-  - syntheticPrice() reproduces seeded closing price for any (symbol, sector, date)
-  - Returns per-stock: entry price, exit price, % change, hit/miss
-  - Returns accuracy stats: overall hit rate, strong buy hit rate, avg return per signal type
-  - Returns horizonAvailable: false when outcome date is still in the future
+- New fetchRealPricesForSymbols(symbols): batch-fetches live NSE prices from Yahoo Finance
+  using .NS suffix (e.g., RELIANCE.NS). 5-min cache on trading days, 60-min on weekends.
+- In buildAIIntelligenceDashboard: after top50WithSignals is built, overlay real Yahoo prices
+  on currentPrice, priceChange, priceChangePercent for stocks where live data is available.
+  Scoring pipeline is unaffected — only display fields are updated.
+- Each stock now has priceSource: 'live' | 'synthetic' field.
+- Non-trading day zeroing also sets priceSource: 'synthetic'.
+- realPriceCache invalidated on each trading day (5-min TTL).
 
 AIStockIntelligenceTab.tsx:
-- New interfaces: OutcomeRow, OutcomeAccuracy, OutcomeData
-- New state: horizon (5/10/20), outcomes, outcomesLoading
-- View toggle now has 4 tabs: Rankings | Sectors | Stock Trend | Outcomes
-- Outcomes view:
-  - Horizon selector (5D / 10D / 20D trading days)
-  - "Not yet available" state when outcome date is in the future
-  - Accuracy KPI strip: overall hit rate, strong buy hit rate, avg return SB, avg return BUY
-  - Per-stock table sorted by return: entry ₹, exit ₹, % return, HIT/MISS badge
-  - Only shows BUY/STRONG BUY signals (the actionable predictions)
+- StockIntelligenceResult interface: added priceSource?: 'live' | 'synthetic'
+- Chg% column: shows green "LIVE" badge when priceSource === 'live'
+- Expanded row: shows current price with ₹ symbol + LIVE badge when live
+- KPIBar: new liveCount prop — shows "N Live Prices" badge in emerald when > 0
+- KPIBar render: passes liveCount from dashboard.rankings filter
+
+Data sources summary:
+- Macro (VIX, Crude, USDINR, Nifty): Yahoo Finance — REAL ✓
+- News feed (6 RSS sources): Economic Times, Moneycontrol, LiveMint, etc. — REAL ✓
+- Gemini AI enrichment: Google Gemini 1.5 Flash — REAL ✓
+- Stock prices (top 50): Yahoo Finance .NS — REAL ✓ (new)
+- Scoring pipeline (quant, rally, inst, AI modules): seeded synthetic — MODEL ✓
+- Upstox ORB/VWAP: live when token set, synthetic fallback — HYBRID ✓

@@ -3972,6 +3972,28 @@ Respond ONLY with this JSON structure (fill every field):
     const top50 = top50WithSignals;
     const allRanked = rankedWithSignals;
 
+    // ── Real price overlay: fetch live Yahoo Finance prices for top 50 symbols ──
+    // This overlays currentPrice, priceChange, priceChangePercent with real market data.
+    // Scoring pipeline is unaffected (uses synthetic candles). Only display fields change.
+    let realPrices: Map<string, { price: number; changePct: number }> = new Map();
+    try {
+      const top50Symbols = top50.map((r: any) => r.symbol);
+      realPrices = await fetchRealPricesForSymbols(top50Symbols);
+    } catch { /* non-blocking — fall back to synthetic prices */ }
+
+    const top50WithRealPrices = top50.map((r: any) => {
+      const live = realPrices.get(r.symbol);
+      if (!live || live.price <= 0) return r; // keep synthetic
+      const prevPrice = live.price / (1 + live.changePct / 100);
+      return {
+        ...r,
+        currentPrice: +live.price.toFixed(2),
+        priceChange: +(live.price - prevPrice).toFixed(2),
+        priceChangePercent: +live.changePct.toFixed(2),
+        priceSource: 'live' as const,
+      };
+    });
+
     // earlyRallyCandidates: prefer real ORB signals, always fall back to top rallyScore
     const orbCandidates = rankedWithSignals.filter(r => r.earlyRallySignal);
     const earlyRallyCandidates = rankedWithSignals
@@ -4030,7 +4052,7 @@ Respond ONLY with this JSON structure (fill every field):
           type: item.tickers.length > 0 ? 'stock' : 'macro',
           rallyRelevance: item.sentiment.label === 'POSITIVE' ? 'WATCHLIST' : undefined,
         }))
-      : top50.slice(0, 20).map((r, i) => ({
+      : top50WithRealPrices.slice(0, 20).map((r, i) => ({
           symbol: r.symbol,
           headline: `${r.symbol} (${r.sector}): ${r.signal} signal — score ${Math.round(r.finalScore * 100)}, vol spike ${r.volumeSpike.toFixed(1)}x, ${r.priceChangePercent >= 0 ? 'up' : 'down'} ${Math.abs(r.priceChangePercent).toFixed(2)}% today`,
           sector: r.sector,
@@ -4048,7 +4070,7 @@ Respond ONLY with this JSON structure (fill every field):
         }));
 
     const payload = {
-      rankings: top50,  // Top 50 only — frontend shows all 4 signal types within this set
+      rankings: top50WithRealPrices,  // Top 50 with real prices overlaid where available
       earlyRallyCandidates,
       liveAlerts,
       newsFeed: realNewsFeed,
@@ -4105,6 +4127,7 @@ Respond ONLY with this JSON structure (fill every field):
         priceAcceleration: 0,
         volumeSpike: 1,
         dataSource: 'synthetic',
+        priceSource: 'synthetic',
         // Keep earlyRallySignal, rallyProbabilityScore, institutionalSignal, alerts intact
         // Filter out intraday-only alert types (RALLY, VOLUME) — keep AI/INSTITUTIONAL/NEWS
         alerts: (r.alerts || []).filter((a: any) => a.alertType !== 'RALLY' && a.alertType !== 'VOLUME'),
@@ -4148,6 +4171,49 @@ Respond ONLY with this JSON structure (fill every field):
 
   const fetchYahooQuote = async (symbol: string): Promise<{ price: number; changePct: number } | null> => {
     try {
+      const encoded = encodeURIComponent(symbol);
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?interval=1d&range=1d`;
+      const resp = await axios.get(url, {
+        timeout: 8000,
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+      });
+      const meta = resp.data?.chart?.result?.[0]?.meta;
+      if (!meta) return null;
+      return {
+        price: meta.regularMarketPrice ?? meta.chartPreviousClose ?? 0,
+        changePct: meta.regularMarketChangePercent ?? 0,
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  // ── Real NSE Stock Price Cache (Yahoo Finance, 5-min TTL) ─────────────────
+  // Fetches live prices for top NSE stocks using Yahoo Finance (no auth needed).
+  // Symbols use .NS suffix (e.g., RELIANCE.NS). Falls back gracefully.
+  let realPriceCache: { expiresAt: number; prices: Map<string, { price: number; changePct: number }> } | null = null;
+
+  const fetchRealPricesForSymbols = async (symbols: string[]): Promise<Map<string, { price: number; changePct: number }>> => {
+    const now = Date.now();
+    if (realPriceCache && realPriceCache.expiresAt > now) return realPriceCache.prices;
+
+    const prices = new Map<string, { price: number; changePct: number }>();
+    // Batch in groups of 10 to avoid rate limiting
+    const chunks: string[][] = [];
+    for (let i = 0; i < symbols.length; i += 10) chunks.push(symbols.slice(i, i + 10));
+
+    for (const chunk of chunks) {
+      await Promise.all(chunk.map(async sym => {
+        const q = await fetchYahooQuote(`${sym}.NS`).catch(() => null);
+        if (q && q.price > 0) prices.set(sym, q);
+      }));
+    }
+
+    const ttl = isMarketDay() ? 5 * 60_000 : 60 * 60_000;
+    realPriceCache = { expiresAt: now + ttl, prices };
+    logAction('real-prices.fetched', { count: prices.size, total: symbols.length });
+    return prices;
+  };
       const encoded = encodeURIComponent(symbol);
       const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?interval=1d&range=1d`;
       const resp = await axios.get(url, {
