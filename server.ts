@@ -1621,10 +1621,32 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
       realOHLCVMap.set(p.symbol, getOHLCVFromCache(p.symbol));
     });
 
-    // ── Pass 2b: Fast live-price pre-fetch for top 100 symbols missing from cache ──
-    // Uses Yahoo v8 range=1d (fast, ~200ms per call). Limit to top 20 to save CPU.
-    // This ensures displayed stocks have a real price even on cold start.
-    const symbolsMissingPrice = top100Universe
+    // ── Pass 2b: Fetch full OHLCV (range=2y) for top symbols missing from cache ──
+    // fetchRealOHLCV gives candles + live price in one call → stock shows LIVE not SIM.
+    // Capped at 15 symbols inline; rest get warmed in background for next request.
+    const symbolsMissingOHLCV = top100Universe
+      .map(p => p.symbol)
+      .filter(s => {
+        const ohlcv = realOHLCVCache.get(s);
+        return !(ohlcv && ohlcv.expiresAt > Date.now());
+      })
+      .slice(0, 15);
+
+    if (symbolsMissingOHLCV.length > 0) {
+      await Promise.race([
+        Promise.allSettled(symbolsMissingOHLCV.map(s => fetchRealOHLCV(s).catch(() => null))),
+        new Promise<void>(r => setTimeout(r, 4000)),
+      ]);
+      // Refresh realOHLCVMap with newly fetched data
+      top100Universe.forEach(p => {
+        if (!realOHLCVMap.get(p.symbol)) {
+          realOHLCVMap.set(p.symbol, getOHLCVFromCache(p.symbol));
+        }
+      });
+    }
+
+    // Pass 2c: For any still missing price (OHLCV fetch failed), quick range=1d fallback
+    const symbolsStillMissingPrice = top100Universe
       .map(p => p.symbol)
       .filter(s => {
         const cached = perSymbolPriceCache.get(s);
@@ -1632,23 +1654,19 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
         const ohlcv = realOHLCVCache.get(s);
         return !(ohlcv && ohlcv.expiresAt > Date.now() && ohlcv.livePrice);
       })
-      .slice(0, 20); // cap at 20 — rest get price from OHLCV candle close
+      .slice(0, 10);
 
-    if (symbolsMissingPrice.length > 0) {
+    if (symbolsStillMissingPrice.length > 0) {
       const ttl = isMarketDay() ? 5 * 60_000 : 60 * 60_000;
       const now = Date.now();
       await Promise.race([
-        Promise.allSettled(symbolsMissingPrice.map(async sym => {
+        Promise.allSettled(symbolsStillMissingPrice.map(async sym => {
           const q = await fetchYahooQuote(sym).catch(() => null);
           if (q && q.price > 0) {
             perSymbolPriceCache.set(sym, { price: q.price, changePct: q.changePct, expiresAt: now + ttl });
-            const ohlcv = realOHLCVCache.get(sym);
-            if (ohlcv && ohlcv.expiresAt > Date.now() && !ohlcv.livePrice) {
-              realOHLCVCache.set(sym, { ...ohlcv, livePrice: q.price, changePct: q.changePct });
-            }
           }
         })),
-        new Promise<void>(r => setTimeout(r, 3000)),
+        new Promise<void>(r => setTimeout(r, 2000)),
       ]);
     }
 
@@ -4048,8 +4066,29 @@ Respond ONLY with this JSON structure (fill every field):
       mbRealOHLCVMap.set(p.symbol, getOHLCVFromCache(p.symbol));
     });
 
-    // ── Pass 2b: Fast live-price pre-fetch — cap at 20 to save CPU ──
-    const mbSymbolsMissingPrice = universe
+    // ── Pass 2b: Fetch full OHLCV (range=2y) for top symbols missing from cache ──
+    const mbSymbolsMissingOHLCV = universe
+      .map(p => p.symbol)
+      .filter(s => {
+        const ohlcv = realOHLCVCache.get(s);
+        return !(ohlcv && ohlcv.expiresAt > Date.now());
+      })
+      .slice(0, 15);
+
+    if (mbSymbolsMissingOHLCV.length > 0) {
+      await Promise.race([
+        Promise.allSettled(mbSymbolsMissingOHLCV.map(s => fetchRealOHLCV(s).catch(() => null))),
+        new Promise<void>(r => setTimeout(r, 4000)),
+      ]);
+      universe.forEach(p => {
+        if (!mbRealOHLCVMap.get(p.symbol)) {
+          mbRealOHLCVMap.set(p.symbol, getOHLCVFromCache(p.symbol));
+        }
+      });
+    }
+
+    // Pass 2c: Quick price fallback for any still missing
+    const mbSymbolsStillMissingPrice = universe
       .map(p => p.symbol)
       .filter(s => {
         const cached = perSymbolPriceCache.get(s);
@@ -4057,23 +4096,19 @@ Respond ONLY with this JSON structure (fill every field):
         const ohlcv = realOHLCVCache.get(s);
         return !(ohlcv && ohlcv.expiresAt > Date.now() && ohlcv.livePrice);
       })
-      .slice(0, 20);
+      .slice(0, 10);
 
-    if (mbSymbolsMissingPrice.length > 0) {
+    if (mbSymbolsStillMissingPrice.length > 0) {
       const ttl = isMarketDay() ? 5 * 60_000 : 60 * 60_000;
       const now = Date.now();
       await Promise.race([
-        Promise.allSettled(mbSymbolsMissingPrice.map(async sym => {
+        Promise.allSettled(mbSymbolsStillMissingPrice.map(async sym => {
           const q = await fetchYahooQuote(sym).catch(() => null);
           if (q && q.price > 0) {
             perSymbolPriceCache.set(sym, { price: q.price, changePct: q.changePct, expiresAt: now + ttl });
-            const ohlcv = realOHLCVCache.get(sym);
-            if (ohlcv && ohlcv.expiresAt > Date.now() && !ohlcv.livePrice) {
-              realOHLCVCache.set(sym, { ...ohlcv, livePrice: q.price, changePct: q.changePct });
-            }
           }
         })),
-        new Promise<void>(r => setTimeout(r, 3000)),
+        new Promise<void>(r => setTimeout(r, 2000)),
       ]);
     }
 

@@ -1,28 +1,13 @@
-fix: sync stock signal with superbrain, fix ROE/ROCE display, fix dataSource
+fix: stocks showing SIM/no-price — fetch full OHLCV (range=2y) in Pass 2b
 
-Issues fixed:
+Root cause: Pass 2b was calling fetchYahooQuote (range=1d, ~5 candles)
+which only populated perSymbolPriceCache but NOT realOHLCVCache.
+fetchRealOHLCV requires >=60 candles, so realOHLCVMap stayed null
+→ dataSource='synthetic', price='—'.
 
-1. Stock Signal vs Superbrain Signal mismatch
-   - Root cause: rlAction was a simple 2-condition rule (gradientBoost > 0.72 → BUY)
-     that ignored the full 5-layer Superbrain fusion. For BLOOM: gradientBoost=49.5%
-     → HOLD, but Superbrain's fusion gave STRONG_BUY.
-   - Fix: Superbrain is now computed FIRST inside analyzeUltraQuantProfile.
-     rlAction is then derived from sb.decision (STRONG_BUY/BUY → BUY, SELL/STRONG_SELL → SELL).
-     Both signals are always in sync.
-   - UI: Signal column now shows superbrain.decision (shows STRONG_BUY when applicable)
-     with tooltip "Superbrain AI decision" to clarify it's the AI signal.
+Fix: Pass 2b now calls fetchRealOHLCV (range=2y) for top 15 symbols
+missing OHLCV. This gives full candles + live price in one call,
+populating both realOHLCVCache and perSymbolPriceCache.
+Pass 2c added as fallback: range=1d price-only for any still missing.
 
-2. ROE, ROCE, PE, D/E, Promoter% all showing -- for BSE stocks
-   - Root cause: fetchScreenerFundamentals only tried one URL format.
-     Screener.in returns 404 for some BSE-only stocks with default symbol.
-   - Fix: Try multiple symbol variants (original, hyphen-stripped, uppercase).
-     Also added empty ratios check — skip variant if ratios array is empty.
-
-3. dataSource showing 'synthetic' even when real OHLCV + live price available
-   - Fix: dataSource now checks perSymbolPriceCache as 3rd source.
-     If we have a cached live price (from fast pre-fetch), dataSource = 'real'.
-
-4. dataQuality showing 'LOW' even when real OHLCV candles available
-   - Fix: dataQuality upgraded to 'MEDIUM' when real OHLCV candles exist,
-     or when ohlcvLivePrice is available, or when perSymbolPriceCache has a price.
-     This ensures Superbrain uses correct data quality weights.
+Same fix applied to buildMultibaggerScan.
