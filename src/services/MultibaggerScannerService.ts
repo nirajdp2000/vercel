@@ -64,6 +64,11 @@ export interface MultibaggerStock {
   // ── Legacy alias kept for backward UI compatibility ───────────────────────
   /** Alias for trendScore */
   trendStrength: number;
+
+  /** Real-time last close price from Yahoo Finance (null if unavailable) */
+  currentPrice?: number | null;
+  /** 'real' if fetched from Yahoo Finance, 'synthetic' if estimated */
+  dataSource?: string;
 }
 
 /** Full response from the scanner API */

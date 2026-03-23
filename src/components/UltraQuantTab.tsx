@@ -27,6 +27,8 @@ type AnalysisResult = {
   finalPredictionScore: number; orderImbalance: number;
   volumeProfile?: { poc?: number; vah?: number; val?: number };
   alerts: Array<{ stockSymbol: string; signalType: string; confidenceScore: number; timestamp: string }>;
+  currentPrice?: number | null;
+  dataSource?: string;
 };
 
 type UltraQuantDashboard = {
@@ -505,6 +507,7 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
                   {c.label}<SortIcon k={c.key} />
                 </th>
               ))}
+              <th className="px-3 py-3">Price</th>
               <th className="px-3 py-3">Regime</th>
               <th className="px-3 py-3">Signal</th>
               <th className="px-3 py-3 w-8"></th>
@@ -556,6 +559,11 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
                     {stock.maxDrawdown.toFixed(1)}%
                   </td>
                   <td className="px-3 py-3"><RegimePill regime={stock.marketRegime} /></td>
+                  <td className="px-3 py-3">
+                    <span className="text-[11px] font-black text-amber-300">
+                      {(stock as any).currentPrice != null ? `₹${Number((stock as any).currentPrice).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
+                    </span>
+                  </td>
                   <td className="px-3 py-3"><SignalPill action={stock.rlAction} /></td>
                   <td className="px-3 py-3 text-zinc-600">
                     {expanded === stock.symbol ? <ChevronUp size={12} /> : <ChevronRight size={12} />}
@@ -563,7 +571,7 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
                 </tr>
                 {expanded === stock.symbol && (
                   <tr className="bg-cyan-500/[0.03] border-b border-cyan-500/10">
-                    <td colSpan={10} className="px-4 py-4">
+                    <td colSpan={11} className="px-4 py-4">
                       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-6 text-[10px]">
                         {[
                           { label: 'Growth Ratio',    value: `${stock.growthRatio.toFixed(2)}x`,                    color: 'text-emerald-400' },
