@@ -1,26 +1,28 @@
-fix: extract live price from OHLCV meta for accurate real-time prices
+fix: fast live-price pre-fetch for all top-100 stocks before analysis
 
-Root cause: analyzeUltraQuantProfile was using enrichedData.yahoo.lastPrice
-(from MarketDataAggregator enrichment cache) as the only real price source.
-But enrichment is fire-and-forget and may not complete before first scan.
+Root cause: BLOOM and other BSE-only/small-cap stocks showed — price because:
+1. OHLCV background warmer is fire-and-forget (cold on first request)
+2. enrichStocksBackground is also fire-and-forget (cold on first request)
+3. Both caches empty on cold start → synthetic candles → null currentPrice
 
-Fix: fetchRealOHLCV already calls Yahoo v8 chart API and gets meta.regularMarketPrice
-in the same HTTP response as candles. Now we extract and store livePrice + changePct
-from that meta field directly into realOHLCVCache.
+Fix: Add Pass 2b in buildUltraQuantDashboard and buildMultibaggerScan:
+- Before analysis, identify all top-100 symbols missing a cached price
+- Batch-fetch live prices via fetchYahooQuote (range=1d, ~200ms each)
+- Hard 3s total timeout — never blocks beyond that
+- Populates perSymbolPriceCache for use in analyzeUltraQuantProfile
+- Also backfills realOHLCVCache.livePrice if candles exist but livePrice was null
 
-Changes:
-- realOHLCVCache now stores { candles, livePrice, changePct } — extracted from
-  Yahoo v8 meta.regularMarketPrice in the same call that fetches candles
-- perSymbolPriceCache populated from OHLCV fetch (avoids duplicate Yahoo calls)
-- getLivePriceFromCache() helper returns livePrice + changePct from OHLCV cache
-- analyzeUltraQuantProfile: new ohlcvLivePrice + ohlcvChangePct params
-  Price priority: Yahoo enrichment > OHLCV meta livePrice > OHLCV last candle > null
-- lstmPredictedPrice: scaled to realBase (live price) when it differs from endPrice
-  (EOD close) by >0.5% — ensures LSTM target is relative to current live price
-- Superbrain: receives best available real price (enrichment > ohlcvLivePrice > EOD)
-- buildMultibaggerScan: same livePrice priority fix for currentPrice + pChange
-- fetchYahooFundamentals: range=1y → range=5d (faster, smaller payload)
-  52W high/low now from meta.fiftyTwoWeekHigh/Low (reliable in v8 meta)
-- perSymbolPriceCache moved before fetchRealOHLCV to fix declaration order
-- Added /api/debug/enrichment endpoint: shows cache state for any symbols
-  (enrichment hit, OHLCV hit, livePrice, changePct, expiresIn)
+analyzeUltraQuantProfile price priority (4 sources now):
+  1. Yahoo enrichment lastPrice (MarketDataAggregator, 1hr cache)
+  2. OHLCV meta regularMarketPrice (from fetchRealOHLCV, same v8 call)
+  3. perSymbolPriceCache (from fetchYahooQuote range=1d, fast pre-fetch)
+  4. OHLCV last candle close (EOD, real but may be yesterday)
+  5. null — truly synthetic, no Yahoo data at all
+
+Same fix applied to buildMultibaggerScan.
+pChange and superbrain price also use the same 4-source priority.
+
+Verified: BLOOM.BO returns 224 valid candles + livePrice=11.46 from Yahoo v8.
+The 60-candle check passes. Issue was purely cold-cache on first request.
+
+Also cleanup: test-bloom.mjs removed from repo.
