@@ -838,7 +838,52 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
     return { bids, asks };
   };
 
-  const analyzeUltraQuantProfile = (profile: UltraQuantProfile, request: ReturnType<typeof normalizeUltraQuantRequest>) => {
+  // ── Real OHLCV cache: symbol → candles (TTL: 60 min) ─────────────────────
+  const realOHLCVCache = new Map<string, { candles: UltraQuantCandle[]; expiresAt: number }>();
+
+  /**
+   * Fetch 1-year daily OHLCV candles from Yahoo Finance for an NSE symbol.
+   * Returns null if the symbol is not found or data is insufficient.
+   */
+  const fetchRealOHLCV = async (symbol: string): Promise<UltraQuantCandle[] | null> => {
+    const cached = realOHLCVCache.get(symbol);
+    if (cached && cached.expiresAt > Date.now()) return cached.candles;
+
+    try {
+      const encoded = encodeURIComponent(`${symbol}.NS`);
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?interval=1d&range=2y`;
+      const resp = await axios.get(url, {
+        timeout: 10000,
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      });
+      const result = resp.data?.chart?.result?.[0];
+      if (!result) return null;
+
+      // Validate symbol match to avoid Yahoo returning wrong instrument
+      const returnedSym: string = (result.meta?.symbol ?? '').toUpperCase().replace('.NS', '');
+      if (returnedSym && returnedSym !== symbol.toUpperCase()) return null;
+
+      const timestamps: number[] = result.timestamp ?? [];
+      const q = result.indicators?.quote?.[0];
+      if (!q || timestamps.length < 60) return null;
+
+      const candles: UltraQuantCandle[] = [];
+      for (let i = 0; i < timestamps.length; i++) {
+        const o = q.open?.[i], h = q.high?.[i], l = q.low?.[i], c = q.close?.[i], v = q.volume?.[i];
+        if (o == null || h == null || l == null || c == null || c <= 0) continue;
+        candles.push({ open: o, high: h, low: l, close: c, volume: v ?? 0 });
+      }
+
+      if (candles.length < 60) return null;
+
+      realOHLCVCache.set(symbol, { candles, expiresAt: Date.now() + 60 * 60_000 });
+      return candles;
+    } catch (_e) {
+      return null;
+    }
+  };
+
+  const analyzeUltraQuantProfile = (profile: UltraQuantProfile, request: ReturnType<typeof normalizeUltraQuantRequest>, realCandles?: UltraQuantCandle[] | null) => {
     const random = seededGenerator(symbolSeed(profile.symbol));
     const totalDays = Math.max(260, request.historicalPeriodYears * 252);
     const sectorDrift = {
@@ -852,16 +897,22 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
       Materials: 0.00095
     }[profile.sector] ?? 0.001;
 
-    const candles: UltraQuantCandle[] = [];
-    let close = 80 + random() * 1800;
-    for (let day = 0; day < totalDays; day++) {
-      const open = close;
-      const drift = sectorDrift + Math.sin(day / 31 + random()) * 0.006 + (random() - 0.5) * 0.05;
-      close = Math.max(20, close * (1 + drift));
-      const high = Math.max(open, close) * (1 + 0.002 + random() * 0.02);
-      const low = Math.min(open, close) * (1 - 0.002 - random() * 0.018);
-      const volume = profile.averageVolume * (0.85 + random() * 0.9) * (1 + Math.max(0, drift * 10));
-      candles.push({ open, high, low, close, volume });
+    // Use real OHLCV if available, otherwise fall back to synthetic
+    let candles: UltraQuantCandle[];
+    if (realCandles && realCandles.length >= 60) {
+      candles = realCandles;
+    } else {
+      candles = [];
+      let close = 80 + random() * 1800;
+      for (let day = 0; day < totalDays; day++) {
+        const open = close;
+        const drift = sectorDrift + Math.sin(day / 31 + random()) * 0.006 + (random() - 0.5) * 0.05;
+        close = Math.max(20, close * (1 + drift));
+        const high = Math.max(open, close) * (1 + 0.002 + random() * 0.02);
+        const low = Math.min(open, close) * (1 - 0.002 - random() * 0.018);
+        const volume = profile.averageVolume * (0.85 + random() * 0.9) * (1 + Math.max(0, drift * 10));
+        candles.push({ open, high, low, close, volume });
+      }
     }
 
     const closes = candles.map((candle) => candle.close);
@@ -982,7 +1033,7 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
       sector: profile.sector,
       industry: profile.industry,
       marketCap: profile.marketCap,
-      currentPrice: null as number | null, // will be replaced by real Yahoo price in overlay
+      currentPrice: Number(endPrice.toFixed(2)), // real price when real candles used, synthetic fallback otherwise
       cagr,
       momentum,
       trendStrength,
@@ -1247,8 +1298,19 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
     const rawUniverse = await createUltraQuantUniverse();
     const totalLoaded = rawUniverse.length;
 
+    // Pre-fetch real OHLCV for all stocks in parallel (batched to avoid rate limiting)
+    const OHLCV_BATCH = 5;
+    const realOHLCVMap = new Map<string, UltraQuantCandle[] | null>();
+    for (let i = 0; i < rawUniverse.length; i += OHLCV_BATCH) {
+      const chunk = rawUniverse.slice(i, i + OHLCV_BATCH);
+      await Promise.all(chunk.map(async p => {
+        const candles = await fetchRealOHLCV(p.symbol).catch(() => null);
+        realOHLCVMap.set(p.symbol, candles);
+      }));
+    }
+
     const analyzedUniverse = rawUniverse
-      .map((profile) => analyzeUltraQuantProfile(profile, request));
+      .map((profile) => analyzeUltraQuantProfile(profile, request, realOHLCVMap.get(profile.symbol)));
     const totalProcessed = analyzedUniverse.length;
 
     // Soft sector filter only — do NOT hard-filter on numeric thresholds
@@ -1270,26 +1332,6 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
 
     const results = resultPool.slice(0, 100);
     const totalReturned = results.length;
-
-    // ── Overlay real Yahoo Finance prices ──────────────────────────────────
-    // Replace synthetic currentPrice & lstmPredictedPrice with live market data.
-    // Falls back to synthetic value if Yahoo returns nothing (e.g. weekend/holiday).
-    try {
-      const symbols = results.map((r) => r.symbol);
-      const realPrices = await fetchRealPricesForSymbols(symbols);
-      for (const r of results) {
-        const real = realPrices.get(r.symbol);
-        if (real && real.price > 0) {
-          // Capture synthetic offset BEFORE overwriting currentPrice
-          const syntheticCurrent = r.currentPrice ?? real.price;
-          const syntheticOffset = r.lstmPredictedPrice && syntheticCurrent > 0
-            ? (r.lstmPredictedPrice - syntheticCurrent) / syntheticCurrent
-            : 0.02;
-          r.currentPrice = Number(real.price.toFixed(2));
-          r.lstmPredictedPrice = Number((real.price * (1 + syntheticOffset)).toFixed(2));
-        }
-      }
-    } catch (_e) { /* keep synthetic prices on failure */ }
 
     console.log(JSON.stringify({ totalLoaded, totalProcessed, totalAfterFilter, totalReturned }));
 
@@ -3451,12 +3493,21 @@ Respond ONLY with this JSON structure (fill every field):
   };
 
   /**
-   * Build deterministic synthetic price+volume series for a stock.
-   * Generates enough history for 200-DMA + 180-day momentum windows.
+   * Build price+volume series for a stock.
+   * Uses real Yahoo Finance OHLCV when available, falls back to synthetic.
    */
-  const mbBuildSeries = (profile: UltraQuantProfile, cycleDays: MultibaggerCycle): {
+  const mbBuildSeries = (profile: UltraQuantProfile, cycleDays: MultibaggerCycle, realCandles?: UltraQuantCandle[] | null): {
     closes: number[]; volumes: number[];
   } => {
+    // Use real data if we have enough history
+    if (realCandles && realCandles.length >= 60) {
+      return {
+        closes:  realCandles.map(c => c.close),
+        volumes: realCandles.map(c => c.volume),
+      };
+    }
+
+    // Synthetic fallback
     const totalDays = Math.max(cycleDays + 380, 400);
     const drift     = MB_SECTOR_DRIFT[profile.sector] ?? 0.001;
     const random    = seededGenerator(symbolSeed(profile.symbol) ^ (cycleDays * 6271));
@@ -3555,8 +3606,19 @@ Respond ONLY with this JSON structure (fill every field):
     const weights  = MB_CYCLE_WEIGHTS[cycleDays];
     const universe = await createUltraQuantUniverse();
 
-    // Step 1: Build price/volume series for every stock
-    const seriesCache = universe.map((p) => mbBuildSeries(p, cycleDays));
+    // Pre-fetch real OHLCV for all stocks (batched, uses shared cache with UltraQuant)
+    const MB_OHLCV_BATCH = 5;
+    const mbRealOHLCVMap = new Map<string, UltraQuantCandle[] | null>();
+    for (let i = 0; i < universe.length; i += MB_OHLCV_BATCH) {
+      const chunk = universe.slice(i, i + MB_OHLCV_BATCH);
+      await Promise.all(chunk.map(async p => {
+        const candles = await fetchRealOHLCV(p.symbol).catch(() => null);
+        mbRealOHLCVMap.set(p.symbol, candles);
+      }));
+    }
+
+    // Step 1: Build price/volume series — real data when available, synthetic fallback
+    const seriesCache = universe.map((p) => mbBuildSeries(p, cycleDays, mbRealOHLCVMap.get(p.symbol)));
 
     // Step 2: Compute per-stock factor scores
     const trendScores     = seriesCache.map(({ closes })  => mbTrendScore(closes));
@@ -3607,7 +3669,7 @@ Respond ONLY with this JSON structure (fill every field):
         symbol:           profile.symbol,
         companyName:      MB_COMPANY_NAMES[profile.symbol] ?? `${profile.symbol} Ltd`,
         sector:           profile.sector,
-        currentPrice:     null as number | null, // will be replaced by real Yahoo price in overlay
+        currentPrice:     Number(seriesCache[i].closes[seriesCache[i].closes.length - 1].toFixed(2)),
         bullishScore:     Number(bullishScore.toFixed(2)),
         trendScore:       Number(trend.toFixed(2)),
         momentumScore:    Number(momentum.toFixed(2)),
@@ -3642,18 +3704,6 @@ Respond ONLY with this JSON structure (fill every field):
       : scored;
 
     const top100 = finalStocks.slice(0, 100).map((s, i) => ({ rank: i + 1, ...s }));
-
-    // ── Overlay real Yahoo Finance prices ──────────────────────────────────
-    try {
-      const symbols = top100.map((s) => s.symbol);
-      const realPrices = await fetchRealPricesForSymbols(symbols);
-      for (const s of top100) {
-        const real = realPrices.get(s.symbol);
-        if (real && real.price > 0) {
-          s.currentPrice = Number(real.price.toFixed(2));
-        }
-      }
-    } catch (_e) { /* keep synthetic prices on failure */ }
 
     const avgBullishScore = top100.reduce((sum, s) => sum + s.bullishScore, 0) / top100.length;
 
