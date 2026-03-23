@@ -484,14 +484,6 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
 
   return (
     <div className="rounded-2xl border border-white/5 bg-zinc-950/70 shadow-xl shadow-black/20 overflow-hidden">
-      {/* Data quality notice */}
-      <div className="flex items-start gap-2.5 border-b border-amber-500/10 bg-amber-500/[0.04] px-4 py-2.5">
-        <Info size={11} className="text-amber-400 shrink-0 mt-0.5" />
-        <p className="text-[9px] leading-4 text-amber-300/80">
-          <span className="font-black text-amber-300">LIVE</span> stocks use real Yahoo Finance OHLCV — price, CAGR, momentum and all indicators are computed from actual market data.&nbsp;
-          <span className="font-black text-zinc-400">SIM</span> stocks could not be resolved on Yahoo Finance (delisted / obscure BSE) — their price and indicators are <span className="font-black text-rose-400">simulated estimates only</span> and should not be used for trading decisions.
-        </p>
-      </div>
       {/* Table header controls */}
       <div className="border-b border-white/5 px-4 py-3 space-y-2.5">
         <div className="flex items-center justify-between gap-3">

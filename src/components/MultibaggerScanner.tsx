@@ -603,15 +603,7 @@ const MultibaggerScanner: React.FC = () => {
                 </span>
               </div>
             </div>
-            {/* Data quality notice */}
-            <div className="flex items-start gap-2.5 border-b border-amber-500/10 bg-amber-500/[0.04] px-5 py-2.5">
-              <Shield className="h-3 w-3 text-amber-400 shrink-0 mt-0.5" />
-              <p className="text-[9px] leading-4 text-amber-300/80">
-                <span className="font-black text-emerald-400">LIVE</span> = real Yahoo Finance data · price, returns and all scores computed from actual OHLCV.&nbsp;
-                <span className="font-black text-zinc-400">SIM</span> = stock not found on Yahoo Finance — indicators are <span className="font-black text-rose-400">simulated estimates</span>, not real market data.
-              </p>
-            </div>
-
+            {/* Rankings table */}
             <div className="max-h-[52rem] overflow-auto">
               <table className="w-full text-left text-sm">
                 <thead className="sticky top-0 bg-zinc-950/95 text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500">

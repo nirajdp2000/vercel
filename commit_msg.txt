@@ -1,5 +1,1 @@
-fix: multi-factor institutional ranking shows 5221 scanned (not 100)
-
-buildHedgeFundSignalDashboard now accepts totalScanned param (full universe size)
-instead of using analyzedUniverse.length (which was always 100 — the top-100 subset
-passed for full analysis). scannedUniverse in summary now correctly reflects 5221.
+remove LIVE/SIM disclaimer banners from UltraQuant and Multibagger tabs
