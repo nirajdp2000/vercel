@@ -1,11 +1,8 @@
-fix: remove orphaned code fragment causing esbuild parse error
+fix: simulated candles use IST market hours, skip weekends, cap at current time
 
-The previous PowerShell regex replacement left a dangling code block
-(the body of fetchYahooQuote) floating outside any function after
-fetchRealPricesForSymbols. This caused esbuild to fail with
-"Unexpected catch" at line 4229 because the orphaned try/catch block
-was at the top level of the module scope.
-
-Removed the 14 orphaned lines. server.ts now has exactly one
-fetchYahooQuote, one fetchRealPricesForSymbols, and buildLiveMacroSnapshot
-follows immediately after with no stray code between them.
+- createSimulatedHistoricalPayload now uses 09:15 IST (03:45 UTC) open
+  and 15:30 IST (10:00 UTC) close instead of wrong UTC times
+- Intraday intervals skip weekends and non-market hours between days
+- Daily/weekly intervals skip Saturday/Sunday
+- endTime capped at Date.now() so today's candles never show future data
+- Fixes Analytics tab showing previous day's candle on market days

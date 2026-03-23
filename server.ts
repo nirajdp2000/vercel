@@ -1258,14 +1258,79 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
     const seed = symbolSeed(`${instrumentKey}-${selectedInterval}`);
     const random = seededGenerator(seed);
     const stepMs = intervalToMinutes(selectedInterval) * 60 * 1000;
-    const startTime = new Date(`${fromDate}T09:15:00Z`).getTime();
-    const endTime = new Date(`${toDate}T15:30:00Z`).getTime();
+    const isIntraday = selectedInterval !== "day" && selectedInterval !== "week";
+
+    // NSE market hours in UTC: 09:15 IST = 03:45 UTC, 15:30 IST = 10:00 UTC
+    const IST_OPEN_UTC_H = 3, IST_OPEN_UTC_M = 45;   // 09:15 IST
+    const IST_CLOSE_UTC_H = 10, IST_CLOSE_UTC_M = 0; // 15:30 IST
+
+    const startTime = (() => {
+      const d = new Date(`${fromDate}T00:00:00Z`);
+      d.setUTCHours(IST_OPEN_UTC_H, IST_OPEN_UTC_M, 0, 0);
+      return d.getTime();
+    })();
+
+    // Cap endTime at current time so today's candles don't show future data
+    const rawEndTime = (() => {
+      const d = new Date(`${toDate}T00:00:00Z`);
+      d.setUTCHours(IST_CLOSE_UTC_H, IST_CLOSE_UTC_M, 0, 0);
+      return d.getTime();
+    })();
+    const endTime = Math.min(rawEndTime, Date.now());
+
     const maxPoints = selectedInterval === "day" ? 400 : 1200;
     const candles: Array<[string, number, number, number, number, number]> = [];
     let cursor = startTime;
     let lastClose = 80 + (seed % 2400) / 10;
 
     while (cursor <= endTime && candles.length < maxPoints) {
+      const d = new Date(cursor);
+      const dow = d.getUTCDay(); // 0=Sun, 6=Sat
+
+      if (isIntraday) {
+        // Skip weekends entirely — jump to next Monday open
+        if (dow === 0) { // Sunday
+          cursor += 24 * 60 * 60 * 1000; // skip to Monday
+          const next = new Date(cursor);
+          next.setUTCHours(IST_OPEN_UTC_H, IST_OPEN_UTC_M, 0, 0);
+          cursor = next.getTime();
+          continue;
+        }
+        if (dow === 6) { // Saturday
+          cursor += 2 * 24 * 60 * 60 * 1000; // skip to Monday
+          const next = new Date(cursor);
+          next.setUTCHours(IST_OPEN_UTC_H, IST_OPEN_UTC_M, 0, 0);
+          cursor = next.getTime();
+          continue;
+        }
+
+        // Skip outside market hours — jump to next day's open
+        const utcH = d.getUTCHours(), utcM = d.getUTCMinutes();
+        const utcMins = utcH * 60 + utcM;
+        const openMins = IST_OPEN_UTC_H * 60 + IST_OPEN_UTC_M;
+        const closeMins = IST_CLOSE_UTC_H * 60 + IST_CLOSE_UTC_M;
+
+        if (utcMins < openMins) {
+          // Before open — jump to open
+          d.setUTCHours(IST_OPEN_UTC_H, IST_OPEN_UTC_M, 0, 0);
+          cursor = d.getTime();
+          continue;
+        }
+        if (utcMins >= closeMins) {
+          // After close — jump to next day's open
+          const next = new Date(cursor + 24 * 60 * 60 * 1000);
+          next.setUTCHours(IST_OPEN_UTC_H, IST_OPEN_UTC_M, 0, 0);
+          cursor = next.getTime();
+          continue;
+        }
+      } else {
+        // Daily/weekly: skip weekends
+        if (dow === 0 || dow === 6) {
+          cursor += 24 * 60 * 60 * 1000;
+          continue;
+        }
+      }
+
       const drift = (random() - 0.46) * (selectedInterval === "day" ? 3.4 : 1.2);
       const open = Number(lastClose.toFixed(2));
       const close = Number(Math.max(20, open + drift).toFixed(2));
