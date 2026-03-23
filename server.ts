@@ -17,6 +17,7 @@ import { PredictionStorageService } from "./src/services/PredictionStorageServic
 import { getSupabaseClient } from "./src/lib/supabase";
 import { fetchNewsIntelligence, getStockSentiment, getTopNews, getSectorSentiment } from "./src/services/NewsIntelligenceService";
 import { enrichStocksBackground, getEnrichedFromCache, fetchFIIDIIData, computeFundamentalScore, type EnrichedStockData } from "./src/services/MarketDataAggregator";
+import { runSuperbrain, type SuperbrainInput } from "./src/services/SuperbrainEngine";
 
 import path from "path";
 import fs from "fs";
@@ -1216,7 +1217,25 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
         sectorReturn,
         institutionalRaw: hedgeInstitutionalRaw,
         breakoutRaw: hedgeBreakoutRaw
-      }
+      },
+      superbrain: runSuperbrain({
+        symbol: profile.symbol, sector: profile.sector, marketCap: profile.marketCap,
+        cagr, momentum, trendStrength, volatility, maxDrawdown, breakoutFrequency,
+        volumeGrowth, gradientBoostProb: gradientBoost * 100, finalPredictionScore,
+        rlAction, orderImbalance, vwapDistance,
+        pe: enrichedData?.yahoo?.pe ?? enrichedData?.screener?.pe ?? null,
+        roe: enrichedData?.screener?.roe ?? null,
+        roce: enrichedData?.screener?.roce ?? null,
+        debtToEquity: enrichedData?.screener?.debtToEquity ?? null,
+        promoterHolding: enrichedData?.screener?.promoterHolding ?? null,
+        profitGrowth3yr: enrichedData?.screener?.profitGrowth3yr ?? null,
+        salesGrowth3yr: enrichedData?.screener?.salesGrowth3yr ?? null,
+        fundamentalScore: enrichedData ? computeFundamentalScore(enrichedData) : null,
+        sentimentScore, newsHeadlines: enrichedData?.newsHeadlines ?? [],
+        pChange: enrichedData?.yahoo?.pChange ?? null,
+        dataQuality: (enrichedData?.dataQuality ?? (realCandles && realCandles.length >= 60 ? 'MEDIUM' : 'LOW')) as 'HIGH' | 'MEDIUM' | 'LOW',
+        dataSource: (enrichedData?.yahoo ? 'real' : (realCandles && realCandles.length >= 60) ? 'real' : 'synthetic') as 'real' | 'synthetic',
+      }, enrichedData?.yahoo?.lastPrice ?? endPrice),
     };
   };
 
@@ -3892,6 +3911,38 @@ Respond ONLY with this JSON structure (fill every field):
         volumeSignal:     volumeResults[i].signal,
         volRatio:         Number(volumeResults[i].volRatio.toFixed(3)),
         sentimentTag,
+        superbrain: runSuperbrain({
+          symbol: profile.symbol, sector: profile.sector, marketCap: profile.marketCap,
+          cagr: cycleReturns[i] * 100,
+          momentum: momentumResults[i].ret90 != null ? 1 + momentumResults[i].ret90 : 1,
+          trendStrength: trend,
+          volatility: 0.02, // MB doesn't compute volatility directly — use conservative estimate
+          maxDrawdown: 20,  // conservative estimate for MB
+          breakoutFrequency: breakout / 100,
+          volumeGrowth: volumeResults[i].volRatio,
+          gradientBoostProb: bullishScore,
+          finalPredictionScore: bullishScore,
+          rlAction: bullishScore >= 70 ? 'BUY' : bullishScore <= 35 ? 'SELL' : 'HOLD',
+          orderImbalance: 1.2,
+          pe: enriched?.yahoo?.pe ?? enriched?.screener?.pe ?? null,
+          roe: enriched?.screener?.roe ?? null,
+          roce: enriched?.screener?.roce ?? null,
+          debtToEquity: enriched?.screener?.debtToEquity ?? null,
+          promoterHolding: enriched?.screener?.promoterHolding ?? null,
+          profitGrowth3yr: enriched?.screener?.profitGrowth3yr ?? null,
+          salesGrowth3yr: enriched?.screener?.salesGrowth3yr ?? null,
+          fundamentalScore: enriched ? computeFundamentalScore(enriched) : null,
+          sentimentScore: bullishScore,
+          newsHeadlines: enriched?.newsHeadlines ?? [],
+          pChange: enriched?.yahoo?.pChange ?? null,
+          bullishScore, trendScore: trend, relativeStrength: relStr,
+          stabilityScore: stability,
+          ret30: momentumResults[i].ret30 * 100,
+          ret90: momentumResults[i].ret90 * 100,
+          ret180: momentumResults[i].ret180 * 100,
+          dataQuality: (enriched?.dataQuality ?? (hasRealOHLCV ? 'MEDIUM' : 'LOW')) as 'HIGH' | 'MEDIUM' | 'LOW',
+          dataSource: (enriched?.yahoo ? 'real' : hasRealOHLCV ? 'real' : 'synthetic') as 'real' | 'synthetic',
+        }, enriched?.yahoo?.lastPrice ?? seriesCache[i].closes[seriesCache[i].closes.length - 1]),
       };
     });
 

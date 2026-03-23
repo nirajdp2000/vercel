@@ -43,6 +43,13 @@ type AnalysisResult = {
   fundamentalScore?: number | null;
   dataQuality?: 'HIGH' | 'MEDIUM' | 'LOW';
   newsHeadlines?: string[];
+  superbrain?: {
+    decision: string; confidence: number; superScore: number; riskScore: number;
+    targetPrice: number | null; stopLoss: number | null; upside: number | null;
+    explanation: string[]; catalysts: string[]; risks: string[]; regime: string;
+    holdingPeriod: string;
+    signals: { technical: number; fundamental: number; sentiment: number; macro: number; momentum: number };
+  };
 };
 
 type UltraQuantDashboard = {
@@ -430,6 +437,105 @@ function AlertsPanel({ alerts }: { alerts: UltraQuantDashboard['alerts'] }) {
   );
 }
 
+// ─── Superbrain Panel ─────────────────────────────────────────────────────────
+
+function SuperbrainPanel({ sb, price }: { sb: NonNullable<AnalysisResult['superbrain']>; price?: number | null }) {
+  const decisionColor =
+    sb.decision === 'STRONG_BUY' ? 'text-emerald-300 border-emerald-400/30 bg-emerald-500/10' :
+    sb.decision === 'BUY'        ? 'text-emerald-400 border-emerald-500/20 bg-emerald-500/[0.06]' :
+    sb.decision === 'HOLD'       ? 'text-amber-300 border-amber-400/25 bg-amber-500/[0.06]' :
+    sb.decision === 'SELL'       ? 'text-rose-400 border-rose-500/20 bg-rose-500/[0.06]' :
+                                   'text-rose-300 border-rose-400/30 bg-rose-500/10';
+  const regimeColor =
+    sb.regime === 'BULL'     ? 'text-emerald-400' :
+    sb.regime === 'BEAR'     ? 'text-rose-400' :
+    sb.regime === 'VOLATILE' ? 'text-amber-400' : 'text-zinc-400';
+
+  return (
+    <div className="rounded-xl border border-violet-500/20 bg-violet-950/20 p-3 space-y-2.5">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[8px] font-black uppercase tracking-[0.2em] text-violet-400 flex items-center gap-1">
+          <Cpu size={9} /> Superbrain AI
+        </span>
+        <span className={`text-[9px] font-black px-2 py-0.5 rounded-lg border ${decisionColor}`}>
+          {sb.decision.replace('_', ' ')}
+        </span>
+        <span className="text-[9px] text-zinc-400">
+          Confidence <span className="font-black text-white">{sb.confidence.toFixed(0)}%</span>
+        </span>
+        <span className={`text-[9px] font-bold ${regimeColor}`}>{sb.regime}</span>
+        <span className="text-[9px] text-zinc-500">{sb.holdingPeriod}</span>
+      </div>
+
+      {/* Signal bars */}
+      <div className="grid grid-cols-5 gap-1.5">
+        {Object.entries(sb.signals).map(([key, val]) => (
+          <div key={key} className="space-y-0.5">
+            <div className="flex justify-between">
+              <span className="text-[7px] uppercase tracking-[0.1em] text-zinc-500">{key.slice(0,4)}</span>
+              <span className="text-[7px] font-black text-zinc-300">{(val as number).toFixed(0)}</span>
+            </div>
+            <div className="h-1 rounded-full bg-white/5 overflow-hidden">
+              <div className="h-full rounded-full bg-violet-400/70 transition-all" style={{ width: `${val}%` }} />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Score + targets */}
+      <div className="grid grid-cols-4 gap-1.5 text-[10px]">
+        <div className="rounded-lg bg-white/[0.03] border border-white/5 px-2 py-1.5">
+          <p className="text-[7px] text-zinc-500 uppercase tracking-[0.1em]">Super Score</p>
+          <p className="font-black text-violet-300">{sb.superScore.toFixed(1)}</p>
+        </div>
+        <div className="rounded-lg bg-white/[0.03] border border-white/5 px-2 py-1.5">
+          <p className="text-[7px] text-zinc-500 uppercase tracking-[0.1em]">Risk</p>
+          <p className={`font-black ${sb.riskScore >= 60 ? 'text-rose-400' : sb.riskScore >= 40 ? 'text-amber-400' : 'text-emerald-400'}`}>{sb.riskScore.toFixed(0)}</p>
+        </div>
+        {sb.targetPrice && (
+          <div className="rounded-lg bg-emerald-500/[0.05] border border-emerald-500/15 px-2 py-1.5">
+            <p className="text-[7px] text-zinc-500 uppercase tracking-[0.1em]">Target</p>
+            <p className="font-black text-emerald-400">₹{sb.targetPrice.toLocaleString('en-IN')}</p>
+          </div>
+        )}
+        {sb.stopLoss && (
+          <div className="rounded-lg bg-rose-500/[0.05] border border-rose-500/15 px-2 py-1.5">
+            <p className="text-[7px] text-zinc-500 uppercase tracking-[0.1em]">Stop Loss</p>
+            <p className="font-black text-rose-400">₹{sb.stopLoss.toLocaleString('en-IN')}</p>
+          </div>
+        )}
+      </div>
+
+      {/* Explanation */}
+      {sb.explanation.length > 0 && (
+        <div className="space-y-0.5">
+          {sb.explanation.map((e, i) => (
+            <p key={i} className="text-[9px] text-zinc-400 leading-4">• {e}</p>
+          ))}
+        </div>
+      )}
+
+      {/* Catalysts + Risks */}
+      {(sb.catalysts.length > 0 || sb.risks.length > 0) && (
+        <div className="grid grid-cols-2 gap-2">
+          {sb.catalysts.length > 0 && (
+            <div className="rounded-lg bg-emerald-500/[0.04] border border-emerald-500/10 px-2 py-1.5">
+              <p className="text-[7px] font-black uppercase tracking-[0.1em] text-emerald-500 mb-1">Catalysts</p>
+              {sb.catalysts.map((c, i) => <p key={i} className="text-[8px] text-emerald-400/80">↑ {c}</p>)}
+            </div>
+          )}
+          {sb.risks.length > 0 && (
+            <div className="rounded-lg bg-rose-500/[0.04] border border-rose-500/10 px-2 py-1.5">
+              <p className="text-[7px] font-black uppercase tracking-[0.1em] text-rose-500 mb-1">Risks</p>
+              {sb.risks.map((r, i) => <p key={i} className="text-[8px] text-rose-400/80">⚠ {r}</p>)}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Stock Table ──────────────────────────────────────────────────────────────
 
 type SignalFilter = 'ALL' | 'BUY' | 'STRONG_BUY' | 'HOLD' | 'SELL';
@@ -631,6 +737,11 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
                             </div>
                           ))}
                         </div>
+
+                        {/* Superbrain AI Decision */}
+                        {(stock as any).superbrain && (
+                          <SuperbrainPanel sb={(stock as any).superbrain} price={(stock as any).currentPrice} />
+                        )}
 
                         {/* News headlines from Google Finance */}
                         {stock.newsHeadlines && stock.newsHeadlines.length > 0 && (

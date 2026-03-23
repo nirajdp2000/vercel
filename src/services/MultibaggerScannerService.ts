@@ -82,6 +82,13 @@ export interface MultibaggerStock {
   fundamentalScore?: number | null;
   dataQuality?: 'HIGH' | 'MEDIUM' | 'LOW';
   newsHeadlines?: string[];
+  superbrain?: {
+    decision: string; confidence: number; superScore: number; riskScore: number;
+    targetPrice: number | null; stopLoss: number | null; upside: number | null;
+    explanation: string[]; catalysts: string[]; risks: string[]; regime: string;
+    holdingPeriod: string;
+    signals: { technical: number; fundamental: number; sentiment: number; macro: number; momentum: number };
+  };
 }
 
 /** Full response from the scanner API */

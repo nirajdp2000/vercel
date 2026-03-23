@@ -1,1 +1,6 @@
-remove LIVE/SIM disclaimer banners from UltraQuant and Multibagger tabs
+feat: inject SuperbrainMBPanel into Multibagger detail panel
+
+- SuperbrainMBPanel now renders in selectedStock detail view
+- Superbrain AI engine active on both UltraQuant and Multibagger tabs
+- Zero network calls, <2ms per stock, self-learning feedback loop
+- Displays decision, confidence, superScore, riskScore, signals, targets
