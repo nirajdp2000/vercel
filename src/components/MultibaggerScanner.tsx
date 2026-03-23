@@ -494,7 +494,7 @@ const MultibaggerScanner: React.FC = () => {
                       {selectedStock.bullishScore.toFixed(1)}
                     </p>
                     <p className="mt-1 text-[10px] text-zinc-500">Rank #{selectedStock.rank}</p>
-                    {selectedStock.currentPrice != null && (
+                    {selectedStock.currentPrice != null && (selectedStock as any).dataSource === 'real' && (
                       <p className="mt-1 text-[11px] font-black text-amber-300">
                         ₹{Number(selectedStock.currentPrice).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </p>
@@ -565,6 +565,14 @@ const MultibaggerScanner: React.FC = () => {
                 </span>
               </div>
             </div>
+            {/* Data quality notice */}
+            <div className="flex items-start gap-2.5 border-b border-amber-500/10 bg-amber-500/[0.04] px-5 py-2.5">
+              <Shield className="h-3 w-3 text-amber-400 shrink-0 mt-0.5" />
+              <p className="text-[9px] leading-4 text-amber-300/80">
+                <span className="font-black text-emerald-400">LIVE</span> = real Yahoo Finance data · price, returns and all scores computed from actual OHLCV.&nbsp;
+                <span className="font-black text-zinc-400">SIM</span> = stock not found on Yahoo Finance — indicators are <span className="font-black text-rose-400">simulated estimates</span>, not real market data.
+              </p>
+            </div>
 
             <div className="max-h-[52rem] overflow-auto">
               <table className="w-full text-left text-sm">
@@ -619,9 +627,10 @@ const MultibaggerScanner: React.FC = () => {
                         <td className="px-4 py-3 text-zinc-300 max-w-[9rem] truncate text-xs">{stock.companyName}</td>
                         <td className="px-4 py-3 text-zinc-400 text-xs uppercase tracking-[0.12em]">{stock.sector}</td>
                         <td className="px-4 py-3">
-                          <span className="text-[11px] font-black text-amber-300">
-                            {stock.currentPrice != null ? `₹${Number(stock.currentPrice).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
-                          </span>
+                          {(stock as any).dataSource === 'real' && stock.currentPrice != null
+                            ? <span className="text-[11px] font-black text-amber-300">₹{Number(stock.currentPrice).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                            : <span className="text-[10px] text-zinc-600" title="Not on Yahoo Finance — simulated estimate">—</span>
+                          }
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
