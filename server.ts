@@ -859,6 +859,7 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
    * Fetch daily OHLCV candles from Yahoo Finance for an NSE symbol.
    * Tries SYMBOL.NS first, then SYMBOL.BO as fallback.
    * Returns null only if both fail or data is insufficient.
+   * Hard timeout: 4s (Vercel safe).
    */
   const fetchRealOHLCV = async (symbol: string): Promise<UltraQuantCandle[] | null> => {
     const cached = realOHLCVCache.get(symbol);
@@ -876,7 +877,7 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
       try {
         const encoded = encodeURIComponent(ticker);
         const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?interval=1d&range=2y`;
-        const resp = await axios.get(url, { timeout: 8000, headers: { 'User-Agent': UA } });
+        const resp = await axios.get(url, { timeout: 4000, headers: { 'User-Agent': UA } });
         const result = resp.data?.chart?.result?.[0];
         if (!result) continue;
 
@@ -905,6 +906,40 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
     }
 
     return null; // all tickers failed
+  };
+
+  // Track which symbols are currently being OHLCV-warmed (avoid duplicate fetches)
+  const ohlcvWarmingSet = new Set<string>();
+
+  /**
+   * Background OHLCV cache warmer — fire-and-forget, never await in scan pipeline.
+   * Fetches in small batches to avoid Yahoo rate-limiting.
+   */
+  const warmOHLCVBackground = async (symbols: string[]): Promise<void> => {
+    const toFetch = symbols.filter(s => {
+      if (ohlcvWarmingSet.has(s)) return false;
+      const c = realOHLCVCache.get(s);
+      return !(c && c.expiresAt > Date.now());
+    });
+    if (toFetch.length === 0) return;
+    toFetch.forEach(s => ohlcvWarmingSet.add(s));
+
+    const BATCH = 10;
+    for (let i = 0; i < toFetch.length; i += BATCH) {
+      const batch = toFetch.slice(i, i + BATCH);
+      await Promise.allSettled(batch.map(async s => {
+        try { await fetchRealOHLCV(s); } finally { ohlcvWarmingSet.delete(s); }
+      }));
+      if (i + BATCH < toFetch.length) await new Promise(r => setTimeout(r, 300));
+    }
+  };
+
+  /**
+   * Get OHLCV from cache only — zero network, safe inside scan pipeline.
+   */
+  const getOHLCVFromCache = (symbol: string): UltraQuantCandle[] | null => {
+    const c = realOHLCVCache.get(symbol);
+    return (c && c.expiresAt > Date.now()) ? c.candles : null;
   };
 
   const analyzeUltraQuantProfile = (profile: UltraQuantProfile, request: ReturnType<typeof normalizeUltraQuantRequest>, realCandles?: UltraQuantCandle[] | null, enrichedData?: EnrichedStockData | null) => {
@@ -1268,7 +1303,7 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
       try {
         const encoded = encodeURIComponent(ticker);
         const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?interval=1d&range=1d`;
-        const resp = await axios.get(url, { timeout: 8000, headers: { 'User-Agent': UA } });
+        const resp = await axios.get(url, { timeout: 4000, headers: { 'User-Agent': UA } });
         const result = resp.data?.chart?.result?.[0];
         const meta = result?.meta;
         if (!meta) continue;
@@ -1337,14 +1372,12 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
         .map(r => r.symbol)
     );
 
-    // ── Pass 2: Fetch real OHLCV only for top 150 (all parallel, ~3-4s) ──
+    // ── Pass 2: Read real OHLCV from cache only (zero network — warmed in background) ──
     const realOHLCVMap = new Map<string, UltraQuantCandle[] | null>();
     const top150 = rawUniverse.filter(p => top150Symbols.has(p.symbol));
-    await Promise.all(
-      top150.map(async p => {
-        realOHLCVMap.set(p.symbol, await fetchRealOHLCV(p.symbol).catch(() => null));
-      })
-    );
+    top150.forEach(p => {
+      realOHLCVMap.set(p.symbol, getOHLCVFromCache(p.symbol));
+    });
 
     // ── Pass 3: Enrich top 50 — read from cache only (zero network, safe for Vercel) ──
     const top50Symbols = [...syntheticUniverse]
@@ -1429,6 +1462,7 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
 
     // Fire-and-forget background cache warm for next request — never blocks response
     enrichStocksBackground(top50Symbols).catch(() => {});
+    warmOHLCVBackground([...top150Symbols]).catch(() => {});
 
     return dashboard;
   };
@@ -3676,14 +3710,12 @@ Respond ONLY with this JSON structure (fill every field):
         .map(x => x.symbol)
     );
 
-    // ── Pass 2: Fetch real OHLCV only for top 150 (all parallel, ~3-4s) ──
+    // ── Pass 2: Read real OHLCV from cache only (zero network — warmed in background) ──
     const mbRealOHLCVMap = new Map<string, UltraQuantCandle[] | null>();
     const mbTop150 = universe.filter(p => top150MBSymbols.has(p.symbol));
-    await Promise.all(
-      mbTop150.map(async p => {
-        mbRealOHLCVMap.set(p.symbol, await fetchRealOHLCV(p.symbol).catch(() => null));
-      })
-    );
+    mbTop150.forEach(p => {
+      mbRealOHLCVMap.set(p.symbol, getOHLCVFromCache(p.symbol));
+    });
 
     // ── Pass 3: Enrich top 50 — read from cache only (zero network, safe for Vercel) ──
     const mbTop50Symbols = universe
@@ -3825,6 +3857,7 @@ Respond ONLY with this JSON structure (fill every field):
 
     // Fire-and-forget background cache warm for next request — never blocks response
     enrichStocksBackground(mbTop50Symbols).catch(() => {});
+    warmOHLCVBackground([...top150MBSymbols]).catch(() => {});
 
     return payload;
   };

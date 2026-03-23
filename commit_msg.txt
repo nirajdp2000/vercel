@@ -1,12 +1,16 @@
-fix: resolve FUNCTION_INVOCATION_TIMEOUT — background enrichment pattern
+fix: eliminate all blocking network calls from scan pipeline
 
-- Replace enrichStocks() (blocking) with enrichStocksBackground() + getEnrichedFromCache()
-- Both buildUltraQuantDashboard and buildMultibaggerScan now read enrichment
-  from in-memory cache only (zero network latency in scan pipeline)
-- Background warm fires after scan response is sent (fire-and-forget)
-- Update all field paths: fundamentals.* → screener.*, quote.* → yahoo.*
-- Yahoo Finance v7 quoteSummary replaces NSE cookie-based API (no cookie needed)
-- Screener.in JSON API replaces HTML scraping (faster, structured)
-- All HTTP calls hard-capped at 4s — Vercel 10s limit safe
-- Fix /api/stock/enrich endpoint to use new pattern
-- Remove deliveryPct (not available from Yahoo Finance)
+Root cause: 150 parallel Yahoo Finance OHLCV requests (8s timeout each)
+inside the scan pipeline — guaranteed timeout on Vercel.
+
+Changes:
+- fetchRealOHLCV: reduce timeout 8s → 4s
+- fetchYahooQuote: reduce timeout 8s → 4s
+- Add warmOHLCVBackground() — fire-and-forget batch OHLCV fetcher (batches of 10)
+- Add getOHLCVFromCache() — zero-network cache read for scan pipeline
+- buildUltraQuantDashboard Pass 2: replace await Promise.all(150 fetches)
+  with synchronous getOHLCVFromCache() reads — zero latency
+- buildMultibaggerScan Pass 2: same change
+- Both pipelines fire warmOHLCVBackground() after response is sent
+- Scan pipeline is now 100% synchronous after Pass 1 (synthetic scoring)
+- First scan: all synthetic (fast, <1s). Subsequent scans: real data from cache.
