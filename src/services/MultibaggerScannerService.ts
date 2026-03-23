@@ -69,6 +69,19 @@ export interface MultibaggerStock {
   currentPrice?: number | null;
   /** 'real' if fetched from Yahoo Finance, 'synthetic' if estimated */
   dataSource?: string;
+  // ── Enriched fields from NSE + Screener.in ───────────────────────────────
+  pChange?: number | null;
+  weekHigh52?: number | null;
+  weekLow52?: number | null;
+  deliveryPct?: number | null;
+  pe?: number | null;
+  roe?: number | null;
+  roce?: number | null;
+  debtToEquity?: number | null;
+  promoterHolding?: number | null;
+  fundamentalScore?: number | null;
+  dataQuality?: 'HIGH' | 'MEDIUM' | 'LOW';
+  newsHeadlines?: string[];
 }
 
 /** Full response from the scanner API */

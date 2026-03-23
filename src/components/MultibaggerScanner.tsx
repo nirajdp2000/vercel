@@ -513,6 +513,34 @@ const MultibaggerScanner: React.FC = () => {
                   <FactorRow label="Stability (Low Vol)"   score={selectedStock.stabilityScore}    weight={preset.weights.stability} />
                 </div>
 
+                {/* Real fundamentals — NSE + Screener.in */}
+                {(selectedStock.pe != null || selectedStock.roe != null || selectedStock.promoterHolding != null) && (
+                  <div className="mt-5 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <p className="text-[9px] font-black uppercase tracking-[0.2em] text-emerald-400">Fundamentals · NSE + Screener.in</p>
+                      {selectedStock.dataQuality === 'HIGH' && <span className="text-[7px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 font-black uppercase tracking-widest">Real Data</span>}
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 xl:grid-cols-6 text-[10px]">
+                      {[
+                        { label: 'PE',          value: selectedStock.pe != null ? selectedStock.pe.toFixed(1) : '--',                                                                  color: selectedStock.pe != null && selectedStock.pe > 0 && selectedStock.pe < 25 ? 'text-emerald-400' : 'text-amber-400' },
+                        { label: 'ROE',         value: selectedStock.roe != null ? `${selectedStock.roe.toFixed(1)}%` : '--',                                                          color: selectedStock.roe != null && selectedStock.roe >= 15 ? 'text-emerald-400' : 'text-zinc-300' },
+                        { label: 'ROCE',        value: selectedStock.roce != null ? `${selectedStock.roce.toFixed(1)}%` : '--',                                                        color: selectedStock.roce != null && selectedStock.roce >= 15 ? 'text-emerald-400' : 'text-zinc-300' },
+                        { label: 'D/E',         value: selectedStock.debtToEquity != null ? selectedStock.debtToEquity.toFixed(2) : '--',                                              color: selectedStock.debtToEquity != null && selectedStock.debtToEquity < 0.5 ? 'text-emerald-400' : selectedStock.debtToEquity != null && selectedStock.debtToEquity > 1.5 ? 'text-rose-400' : 'text-zinc-300' },
+                        { label: 'Promoter',    value: selectedStock.promoterHolding != null ? `${selectedStock.promoterHolding.toFixed(1)}%` : '--',                                  color: selectedStock.promoterHolding != null && selectedStock.promoterHolding >= 50 ? 'text-emerald-400' : 'text-zinc-300' },
+                        { label: 'Delivery',    value: selectedStock.deliveryPct != null ? `${selectedStock.deliveryPct.toFixed(1)}%` : '--',                                          color: selectedStock.deliveryPct != null && selectedStock.deliveryPct >= 50 ? 'text-emerald-400' : 'text-zinc-300' },
+                        { label: '52W High',    value: selectedStock.weekHigh52 != null ? `₹${Number(selectedStock.weekHigh52).toLocaleString('en-IN')}` : '--',                       color: 'text-cyan-300' },
+                        { label: '52W Low',     value: selectedStock.weekLow52 != null ? `₹${Number(selectedStock.weekLow52).toLocaleString('en-IN')}` : '--',                        color: 'text-zinc-400' },
+                        { label: 'Fund Score',  value: selectedStock.fundamentalScore != null ? `${selectedStock.fundamentalScore.toFixed(0)}/100` : '--',                            color: selectedStock.fundamentalScore != null && selectedStock.fundamentalScore >= 65 ? 'text-emerald-400' : 'text-amber-400' },
+                      ].map(m => (
+                        <div key={m.label} className="rounded-xl bg-emerald-500/[0.04] border border-emerald-500/15 px-2.5 py-2">
+                          <p className="text-[7px] uppercase tracking-[0.12em] text-zinc-500 mb-0.5">{m.label}</p>
+                          <p className={`font-black text-[10px] ${m.color}`}>{m.value}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* Return windows */}
                 <div className="mt-5 grid grid-cols-3 gap-3">
                   {[
@@ -545,6 +573,16 @@ const MultibaggerScanner: React.FC = () => {
                     Vol Ratio {selectedStock.volRatio.toFixed(2)}x
                   </span>
                 </div>
+
+                {/* News headlines */}
+                {selectedStock.newsHeadlines && selectedStock.newsHeadlines.length > 0 && (
+                  <div className="mt-4 rounded-2xl bg-white/[0.02] border border-white/5 px-4 py-3 space-y-1.5">
+                    <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">Latest News · Google Finance</p>
+                    {selectedStock.newsHeadlines.slice(0, 3).map((h, idx) => (
+                      <p key={idx} className="text-[10px] text-zinc-400 leading-4">• {h}</p>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </section>

@@ -16,6 +16,7 @@ import { OrbVwapEngine } from "./src/services/upstox/OrbVwapEngine";
 import { PredictionStorageService } from "./src/services/PredictionStorageService";
 import { getSupabaseClient } from "./src/lib/supabase";
 import { fetchNewsIntelligence, getStockSentiment, getTopNews, getSectorSentiment } from "./src/services/NewsIntelligenceService";
+import { enrichStocks, fetchFIIDIIData, computeFundamentalScore, type EnrichedStockData } from "./src/services/MarketDataAggregator";
 
 import path from "path";
 import fs from "fs";
@@ -906,7 +907,7 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
     return null; // all tickers failed
   };
 
-  const analyzeUltraQuantProfile = (profile: UltraQuantProfile, request: ReturnType<typeof normalizeUltraQuantRequest>, realCandles?: UltraQuantCandle[] | null) => {
+  const analyzeUltraQuantProfile = (profile: UltraQuantProfile, request: ReturnType<typeof normalizeUltraQuantRequest>, realCandles?: UltraQuantCandle[] | null, enrichedData?: EnrichedStockData | null) => {
     const random = seededGenerator(symbolSeed(profile.symbol));
     const totalDays = Math.max(260, request.historicalPeriodYears * 252);
     const sectorDrift = {
@@ -955,9 +956,13 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
     const volatility = calculateVolatility(returns);
     const maxDrawdown = calculateMaxDrawdown(closes);
     const growthRatio = fiveYearPrice > 0 ? endPrice / fiveYearPrice : 0;
-    const earningsGrowth = Math.max(0, cagr * 0.72 + random() * 18);
-    const revenueGrowth = Math.max(0, cagr * 0.58 + random() * 14);
-    const earlyVolume = average(candles.slice(0, Math.max(20, Math.floor(candles.length / 10))).map((candle) => candle.volume));
+    // Use real Screener.in fundamentals when available, else estimate from price history
+    const earningsGrowth = enrichedData?.fundamentals?.profitGrowth3yr != null
+      ? Math.max(0, enrichedData.fundamentals.profitGrowth3yr)
+      : Math.max(0, cagr * 0.72 + random() * 18);
+    const revenueGrowth = enrichedData?.fundamentals?.salesGrowth3yr != null
+      ? Math.max(0, enrichedData.fundamentals.salesGrowth3yr)
+      : Math.max(0, cagr * 0.58 + random() * 14);
     const recentVolume = average(candles.slice(-Math.max(20, Math.floor(candles.length / 10))).map((candle) => candle.volume));
     const volumeGrowth = earlyVolume > 0 ? recentVolume / earlyVolume : 1;
 
@@ -1056,8 +1061,25 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
       sector: profile.sector,
       industry: profile.industry,
       marketCap: profile.marketCap,
-      currentPrice: Number(endPrice.toFixed(2)), // real price when real candles used, synthetic fallback otherwise
-      dataSource: (realCandles && realCandles.length >= 60) ? 'real' : 'synthetic',
+      // Use NSE real-time price when available, then Yahoo OHLCV last close, then synthetic
+      currentPrice: enrichedData?.quote?.lastPrice
+        ? Number(enrichedData.quote.lastPrice.toFixed(2))
+        : Number(endPrice.toFixed(2)),
+      dataSource: enrichedData?.quote ? 'real' : (realCandles && realCandles.length >= 60) ? 'real' : 'synthetic',
+      // Enriched fields from NSE + Screener.in
+      pe: enrichedData?.fundamentals?.pe ?? null,
+      pb: enrichedData?.fundamentals?.pb ?? null,
+      roe: enrichedData?.fundamentals?.roe ?? null,
+      roce: enrichedData?.fundamentals?.roce ?? null,
+      debtToEquity: enrichedData?.fundamentals?.debtToEquity ?? null,
+      promoterHolding: enrichedData?.fundamentals?.promoterHolding ?? null,
+      weekHigh52: enrichedData?.quote?.weekHigh52 ?? null,
+      weekLow52: enrichedData?.quote?.weekLow52 ?? null,
+      deliveryPct: enrichedData?.quote?.deliveryPct ?? null,
+      pChange: enrichedData?.quote?.pChange ?? null,
+      fundamentalScore: enrichedData ? computeFundamentalScore(enrichedData) : null,
+      dataQuality: enrichedData?.dataQuality ?? (realCandles && realCandles.length >= 60 ? 'MEDIUM' : 'LOW'),
+      newsHeadlines: enrichedData?.newsHeadlines ?? [],
       cagr,
       momentum,
       trendStrength,
@@ -1324,9 +1346,22 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
       })
     );
 
-    // ── Pass 3: Re-score top 150 with real data, keep rest as synthetic ──
+    // ── Pass 3: Enrich top 50 with NSE quote + Screener.in fundamentals ──
+    const top50Symbols = [...syntheticUniverse]
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 50)
+      .map(r => r.symbol);
+    const enrichedMap = await enrichStocks(top50Symbols).catch(() => new Map<string, EnrichedStockData>());
+    const fiiDii = await fetchFIIDIIData().catch(() => null);
+
+    // ── Pass 4: Re-score top 150 with real OHLCV + enriched fundamentals ──
     const analyzedUniverse = rawUniverse.map((profile) =>
-      analyzeUltraQuantProfile(profile, request, realOHLCVMap.get(profile.symbol) ?? null)
+      analyzeUltraQuantProfile(
+        profile,
+        request,
+        realOHLCVMap.get(profile.symbol) ?? null,
+        enrichedMap.get(profile.symbol) ?? null
+      )
     );
     const totalProcessed = analyzedUniverse.length;
 
@@ -3643,6 +3678,14 @@ Respond ONLY with this JSON structure (fill every field):
       })
     );
 
+    // ── Pass 3: Enrich top 50 with NSE quote + Screener.in fundamentals ──
+    const mbTop50Symbols = universe
+      .map((p, i) => ({ symbol: p.symbol, ret: synthCycleReturns[i] }))
+      .sort((a, b) => b.ret - a.ret)
+      .slice(0, 50)
+      .map(x => x.symbol);
+    const mbEnrichedMap = await enrichStocks(mbTop50Symbols).catch(() => new Map<string, EnrichedStockData>());
+
     // Step 1: Build price/volume series — real data for top 150, synthetic for rest
     const seriesCache = universe.map((p) => mbBuildSeries(p, cycleDays, mbRealOHLCVMap.get(p.symbol) ?? null));
 
@@ -3691,12 +3734,30 @@ Respond ONLY with this JSON structure (fill every field):
         bullishScore >= 35 ? 'Weak'           :
         undefined;
 
+      const enriched = mbEnrichedMap.get(profile.symbol) ?? null;
+      const hasRealOHLCV = !!(mbRealOHLCVMap.get(profile.symbol) ?? null);
+
       return {
         symbol:           profile.symbol,
         companyName:      MB_COMPANY_NAMES[profile.symbol] ?? `${profile.symbol} Ltd`,
         sector:           profile.sector,
-        dataSource:       (mbRealOHLCVMap.get(profile.symbol) ?? null) ? 'real' : 'synthetic',
-        currentPrice:     Number(seriesCache[i].closes[seriesCache[i].closes.length - 1].toFixed(2)),
+        dataSource:       enriched?.quote ? 'real' : hasRealOHLCV ? 'real' : 'synthetic',
+        // Use NSE real-time price first, then Yahoo OHLCV last close
+        currentPrice:     enriched?.quote?.lastPrice
+          ? Number(enriched.quote.lastPrice.toFixed(2))
+          : Number(seriesCache[i].closes[seriesCache[i].closes.length - 1].toFixed(2)),
+        pChange:          enriched?.quote?.pChange ?? null,
+        weekHigh52:       enriched?.quote?.weekHigh52 ?? null,
+        weekLow52:        enriched?.quote?.weekLow52 ?? null,
+        deliveryPct:      enriched?.quote?.deliveryPct ?? null,
+        pe:               enriched?.fundamentals?.pe ?? null,
+        roe:              enriched?.fundamentals?.roe ?? null,
+        roce:             enriched?.fundamentals?.roce ?? null,
+        debtToEquity:     enriched?.fundamentals?.debtToEquity ?? null,
+        promoterHolding:  enriched?.fundamentals?.promoterHolding ?? null,
+        fundamentalScore: enriched ? computeFundamentalScore(enriched) : null,
+        dataQuality:      enriched?.dataQuality ?? (hasRealOHLCV ? 'MEDIUM' : 'LOW'),
+        newsHeadlines:    enriched?.newsHeadlines ?? [],
         bullishScore:     Number(bullishScore.toFixed(2)),
         trendScore:       Number(trend.toFixed(2)),
         momentumScore:    Number(momentum.toFixed(2)),
@@ -3774,6 +3835,25 @@ Respond ONLY with this JSON structure (fill every field):
   // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // END MULTIBAGGER SCANNER ENGINE
   // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+  // ── Multi-source enrichment endpoints ──────────────────────────────────────
+
+  /** GET /api/stock/enrich?symbol=RELIANCE — NSE quote + Screener fundamentals + news */
+  app.get("/api/stock/enrich", async (req, res) => {
+    const symbol = String(req.query.symbol ?? '').toUpperCase().trim();
+    if (!symbol) return res.status(400).json({ error: 'symbol required' });
+    const enriched = await enrichStocks([symbol]).catch(() => new Map());
+    const data = enriched.get(symbol) ?? null;
+    if (!data) return res.status(404).json({ error: 'No data found', symbol });
+    res.json(data);
+  });
+
+  /** GET /api/market/fii-dii — Latest FII/DII net buy/sell from NSE */
+  app.get("/api/market/fii-dii", async (req, res) => {
+    const data = await fetchFIIDIIData().catch(() => null);
+    if (!data) return res.status(503).json({ error: 'FII/DII data unavailable' });
+    res.json(data);
+  });
 
   app.post("/api/ultra-quant/scan", async (req, res) => {
     const dashboard = await buildUltraQuantDashboard(req.body || {});

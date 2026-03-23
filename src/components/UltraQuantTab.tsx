@@ -29,6 +29,20 @@ type AnalysisResult = {
   alerts: Array<{ stockSymbol: string; signalType: string; confidenceScore: number; timestamp: string }>;
   currentPrice?: number | null;
   dataSource?: string;
+  // Enriched fields from NSE + Screener.in
+  pe?: number | null;
+  pb?: number | null;
+  roe?: number | null;
+  roce?: number | null;
+  debtToEquity?: number | null;
+  promoterHolding?: number | null;
+  weekHigh52?: number | null;
+  weekLow52?: number | null;
+  deliveryPct?: number | null;
+  pChange?: number | null;
+  fundamentalScore?: number | null;
+  dataQuality?: 'HIGH' | 'MEDIUM' | 'LOW';
+  newsHeadlines?: string[];
 };
 
 type UltraQuantDashboard = {
@@ -581,26 +595,60 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
                 {expanded === stock.symbol && (
                   <tr className="bg-cyan-500/[0.03] border-b border-cyan-500/10">
                     <td colSpan={11} className="px-4 py-4">
-                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-6 text-[10px]">
-                        {[
-                          { label: 'Growth Ratio',    value: `${stock.growthRatio.toFixed(2)}x`,                    color: 'text-emerald-400' },
-                          { label: 'Earnings Growth', value: `${stock.earningsGrowth.toFixed(1)}%`,                 color: 'text-cyan-400' },
-                          { label: 'Revenue Growth',  value: `${stock.revenueGrowth.toFixed(1)}%`,                  color: 'text-cyan-300' },
-                          { label: 'Volume Growth',   value: `${stock.volumeGrowth.toFixed(1)}%`,                   color: 'text-amber-400' },
-                          { label: 'Sentiment',       value: `${stock.sentimentScore.toFixed(1)}%`,                 color: 'text-violet-400' },
-                          { label: 'Gradient Boost',  value: `${stock.gradientBoostProb.toFixed(1)}%`,              color: 'text-white' },
-                          { label: 'LSTM Price',      value: stock.lstmPredictedPrice.toFixed(2),                   color: 'text-cyan-300' },
-                          { label: 'HMM State',       value: stock.marketState,                                     color: 'text-amber-300' },
-                          { label: 'Drawdown Prob',   value: `${stock.drawdownProbability.toFixed(1)}%`,            color: 'text-rose-400' },
-                          { label: 'Position Size',   value: `${stock.positionSize.toFixed(0)} sh`,                 color: 'text-emerald-400' },
-                          { label: 'POC/VAH/VAL',     value: `${stock.volumeProfile?.poc?.toFixed(0) ?? '--'} / ${stock.volumeProfile?.vah?.toFixed(0) ?? '--'} / ${stock.volumeProfile?.val?.toFixed(0) ?? '--'}`, color: 'text-zinc-300' },
-                          { label: 'Breakout Freq',   value: `${(stock.breakoutFrequency * 100).toFixed(1)}%`,      color: 'text-amber-400' },
-                        ].map(m => (
-                          <div key={m.label} className="rounded-xl bg-white/[0.03] border border-white/5 px-3 py-2">
-                            <p className="text-zinc-500 uppercase tracking-[0.1em] mb-0.5 text-[8px]">{m.label}</p>
-                            <p className={`font-black ${m.color}`}>{m.value}</p>
+                      <div className="space-y-3">
+                        {/* Source badge */}
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {stock.dataQuality === 'HIGH'
+                            ? <span className="text-[8px] font-black px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 tracking-widest uppercase">NSE + Screener.in · Real Fundamentals</span>
+                            : stock.dataQuality === 'MEDIUM'
+                            ? <span className="text-[8px] font-black px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-400 border border-cyan-500/25 tracking-widest uppercase">Yahoo Finance · Real OHLCV</span>
+                            : <span className="text-[8px] font-black px-2 py-0.5 rounded-full bg-zinc-700/40 text-zinc-500 border border-zinc-600/30 tracking-widest uppercase">Simulated Data</span>
+                          }
+                          {stock.pChange != null && (
+                            <span className={`text-[9px] font-black ${stock.pChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {stock.pChange >= 0 ? '▲' : '▼'} {Math.abs(stock.pChange).toFixed(2)}% today
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Real fundamentals grid — NSE + Screener.in */}
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8 text-[10px]">
+                          {[
+                            { label: 'PE Ratio',       value: stock.pe != null ? stock.pe.toFixed(1) : '--',                                                    color: stock.pe != null && stock.pe > 0 && stock.pe < 25 ? 'text-emerald-400' : 'text-amber-400',   real: stock.pe != null },
+                            { label: 'ROE',            value: stock.roe != null ? `${stock.roe.toFixed(1)}%` : '--',                                             color: stock.roe != null && stock.roe >= 15 ? 'text-emerald-400' : 'text-zinc-300',                  real: stock.roe != null },
+                            { label: 'ROCE',           value: stock.roce != null ? `${stock.roce.toFixed(1)}%` : '--',                                           color: stock.roce != null && stock.roce >= 15 ? 'text-emerald-400' : 'text-zinc-300',                 real: stock.roce != null },
+                            { label: 'D/E Ratio',      value: stock.debtToEquity != null ? stock.debtToEquity.toFixed(2) : '--',                                 color: stock.debtToEquity != null && stock.debtToEquity < 0.5 ? 'text-emerald-400' : stock.debtToEquity != null && stock.debtToEquity > 1.5 ? 'text-rose-400' : 'text-zinc-300', real: stock.debtToEquity != null },
+                            { label: 'Promoter %',     value: stock.promoterHolding != null ? `${stock.promoterHolding.toFixed(1)}%` : '--',                     color: stock.promoterHolding != null && stock.promoterHolding >= 50 ? 'text-emerald-400' : 'text-zinc-300', real: stock.promoterHolding != null },
+                            { label: 'Delivery %',     value: stock.deliveryPct != null ? `${stock.deliveryPct.toFixed(1)}%` : '--',                             color: stock.deliveryPct != null && stock.deliveryPct >= 50 ? 'text-emerald-400' : 'text-zinc-300',  real: stock.deliveryPct != null },
+                            { label: '52W High',       value: stock.weekHigh52 != null ? `₹${Number(stock.weekHigh52).toLocaleString('en-IN')}` : '--',          color: 'text-cyan-300',   real: stock.weekHigh52 != null },
+                            { label: '52W Low',        value: stock.weekLow52 != null ? `₹${Number(stock.weekLow52).toLocaleString('en-IN')}` : '--',            color: 'text-zinc-400',   real: stock.weekLow52 != null },
+                            { label: 'Fund. Score',    value: stock.fundamentalScore != null ? `${stock.fundamentalScore.toFixed(0)}/100` : '--',                color: stock.fundamentalScore != null && stock.fundamentalScore >= 65 ? 'text-emerald-400' : 'text-amber-400', real: stock.fundamentalScore != null },
+                            { label: 'Profit Growth',  value: `${stock.earningsGrowth.toFixed(1)}%`,                                                            color: stock.earningsGrowth >= 15 ? 'text-emerald-400' : 'text-cyan-400',                            real: stock.dataQuality === 'HIGH' },
+                            { label: 'Sales Growth',   value: `${stock.revenueGrowth.toFixed(1)}%`,                                                             color: stock.revenueGrowth >= 10 ? 'text-emerald-400' : 'text-cyan-300',                             real: stock.dataQuality === 'HIGH' },
+                            { label: 'Vol Growth',     value: `${stock.volumeGrowth.toFixed(1)}%`,                                                              color: 'text-amber-400',  real: (stock as any).dataSource === 'real' },
+                            { label: 'Max Drawdown',   value: `${stock.maxDrawdown.toFixed(1)}%`,                                                               color: stock.maxDrawdown <= 25 ? 'text-emerald-400' : 'text-rose-400', real: (stock as any).dataSource === 'real' },
+                            { label: 'Breakout Freq',  value: `${(stock.breakoutFrequency * 100).toFixed(1)}%`,                                                 color: 'text-amber-400',  real: (stock as any).dataSource === 'real' },
+                            { label: 'LSTM Target',    value: `₹${stock.lstmPredictedPrice.toFixed(0)}`,                                                        color: 'text-cyan-300',   real: false },
+                            { label: 'HMM State',      value: stock.marketState,                                                                                color: 'text-amber-300',  real: false },
+                          ].map(m => (
+                            <div key={m.label} className={`rounded-xl border px-2.5 py-2 ${m.real ? 'bg-emerald-500/[0.04] border-emerald-500/15' : 'bg-white/[0.03] border-white/5'}`}>
+                              <p className="text-zinc-500 uppercase tracking-[0.1em] mb-0.5 text-[7px] flex items-center gap-1">
+                                {m.label}{m.real && <span className="text-emerald-500">●</span>}
+                              </p>
+                              <p className={`font-black text-[10px] ${m.color}`}>{m.value}</p>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* News headlines from Google Finance */}
+                        {stock.newsHeadlines && stock.newsHeadlines.length > 0 && (
+                          <div className="rounded-xl bg-white/[0.02] border border-white/5 px-3 py-2.5 space-y-1">
+                            <p className="text-[8px] font-black uppercase tracking-[0.15em] text-zinc-500 mb-1.5">Latest News · Google Finance</p>
+                            {stock.newsHeadlines.slice(0, 3).map((h, idx) => (
+                              <p key={idx} className="text-[9px] text-zinc-400 leading-4">• {h}</p>
+                            ))}
                           </div>
-                        ))}
+                        )}
                       </div>
                     </td>
                   </tr>
