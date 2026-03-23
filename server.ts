@@ -1671,13 +1671,15 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
           }
         }
 
-        // Fetch today's intraday candles and append (intraday returns newest-first, reverse to oldest-first)
+        // Fetch today's intraday candles — intraday endpoint returns newest-first
+        // Historical endpoint also returns newest-first, so prepend today's candles
         const todayCandles = await fetchV3Intraday(token, String(instrumentKey), selectedInterval);
-        const todaySorted = [...todayCandles].reverse(); // oldest first
-        allCandles = [...allCandles, ...todaySorted];
+        // todayCandles is newest-first; allCandles (historical past days) is also newest-first
+        // Merge: today's candles are more recent, so they go at the front
+        allCandles = [...todayCandles, ...allCandles];
 
         logAction("historical.intraday.merged", {
-          instrumentKey, interval: selectedInterval, historical: allCandles.length - todaySorted.length, today: todaySorted.length
+          instrumentKey, interval: selectedInterval, historical: allCandles.length - todayCandles.length, today: todayCandles.length
         });
       } else if (totalDays <= chunkDays) {
         // Single historical request (no today involved)
@@ -1695,6 +1697,9 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
           if (allCandles.length > 5000) break; // safety cap
         }
       }
+
+      // Normalize to newest-first (Upstox historical convention) so App.tsx .reverse() works correctly
+      allCandles.sort((a: any[], b: any[]) => new Date(b[0]).getTime() - new Date(a[0]).getTime());
 
       const payload = {
         status: "success",

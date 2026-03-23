@@ -1,14 +1,14 @@
-fix: use Upstox v3 intraday endpoint for today's candles on Analytics tab
+fix: normalize candle order to newest-first so App.tsx reverse works correctly
 
-Root cause: Upstox v3 historical endpoint returns 0 candles for today's
-intraday data. Today's candles require the separate intraday endpoint:
-  GET /v3/historical-candle/intraday/{instrument}/{unit}/{n}
+The intraday endpoint returns oldest-first while historical returns newest-first.
+After merging them, the array was inconsistently ordered causing the chart to
+show wrong/reversed data.
 
-Changes:
-- Added fetchV3Intraday() using the correct intraday endpoint
-- Historical endpoint now detects when toDate === today + intraday interval
-- Fetches past days via historical endpoint + today via intraday endpoint
-- Merges and returns combined candle array (oldest-first)
-- Intraday response has 7 elements [t,o,h,l,c,vol,oi] — OI stripped to match
-- Also fixed simulated fallback to use IST market hours (03:45-10:00 UTC)
-  and skip weekends/non-market hours between days
+Fix: sort allCandles by timestamp descending (newest-first) before returning,
+matching Upstox historical convention. App.tsx .reverse() then correctly
+produces oldest-first for chart rendering.
+
+Verified:
+- 5min today only: newest-first, last candle = current time IST
+- 5min 28 days: newest-first, last candle = current time IST
+- day interval: newest-first, unchanged behavior
