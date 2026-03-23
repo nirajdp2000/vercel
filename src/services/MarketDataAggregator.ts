@@ -87,9 +87,13 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 
 // ─── Supabase fundamentals_cache helpers ─────────────────────────────────────
 
+// Set to true once we confirm the table is missing — avoids repeated 404 attempts
+let supabaseTableMissing = false;
+
 /** Read fundamentals for multiple symbols from Supabase in one query (~50ms). */
 async function readSupabaseFundamentals(symbols: string[]): Promise<Map<string, any>> {
   const result = new Map<string, any>();
+  if (supabaseTableMissing) return result;
   try {
     const sb = getSupabaseClient();
     if (!sb || symbols.length === 0) return result;
@@ -99,7 +103,15 @@ async function readSupabaseFundamentals(symbols: string[]): Promise<Map<string, 
       .select('symbol,pe,roe,roce,debt_to_equity,promoter_holding,week_high_52,week_low_52,last_price,p_change,market_cap,book_value,dividend_yield,sales_growth_3yr,profit_growth_3yr,fetched_at')
       .in('symbol', symbols)
       .gt('fetched_at', cutoff);
-    if (error || !data) return result;
+    if (error) {
+      // Table doesn't exist — stop trying for this process lifetime
+      if (error.code === 'PGRST205' || error.message?.includes('fundamentals_cache')) {
+        supabaseTableMissing = true;
+        console.log('[Supabase] fundamentals_cache table missing — disabling Supabase reads');
+      }
+      return result;
+    }
+    if (!data) return result;
     for (const row of data) result.set(row.symbol, row);
   } catch (_e) { /* Supabase unavailable — degrade gracefully */ }
   return result;
@@ -107,6 +119,7 @@ async function readSupabaseFundamentals(symbols: string[]): Promise<Map<string, 
 
 /** Write fundamentals for one symbol to Supabase (fire-and-forget, non-blocking). */
 function writeSupabaseFundamentals(symbol: string, yahoo: YahooFundamentals | null, screener: ScreenerFundamentals | null): void {
+  if (supabaseTableMissing) return;
   try {
     const sb = getSupabaseClient();
     if (!sb) return;
@@ -462,7 +475,7 @@ export function isYahooCached(symbol: string): boolean {
 export async function loadFundamentalsFromSupabase(symbols: string[]): Promise<void> {
   // Only fetch symbols not already in memory cache
   const missing = symbols.filter(s => !isYahooCached(s));
-  if (missing.length === 0) return;
+  if (missing.length === 0 || supabaseTableMissing) return;
 
   const rows = await readSupabaseFundamentals(missing);
   if (rows.size === 0) return;

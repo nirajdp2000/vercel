@@ -565,10 +565,14 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
           if (data.yahoo?.weekHigh52 != null) patch.weekHigh52 = data.yahoo.weekHigh52;
           if (data.yahoo?.weekLow52  != null) patch.weekLow52  = data.yahoo.weekLow52;
           if (data.yahoo?.pe         != null) patch.pe         = data.yahoo.pe;
+          if (data.yahoo?.pChange    != null) patch.pChange    = data.yahoo.pChange;
           if (data.screener?.roe     != null) patch.roe        = data.screener.roe;
           if (data.screener?.roce    != null) patch.roce       = data.screener.roce;
           if (data.screener?.debtToEquity    != null) patch.debtToEquity    = data.screener.debtToEquity;
           if (data.screener?.promoterHolding != null) patch.promoterHolding = data.screener.promoterHolding;
+          // Update dataQuality based on what we got
+          if (data.screener?.roe != null || data.screener?.roce != null) patch.dataQuality = 'HIGH';
+          else if (data.yahoo?.lastPrice != null) patch.dataQuality = 'MEDIUM';
           if (Object.keys(patch).length > 0) {
             setEnrichCache(prev => ({ ...prev, [symbol]: { ...(prev[symbol] ?? {}), ...patch } }));
           }
@@ -719,23 +723,24 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
                     {expanded === stock.symbol ? <ChevronUp size={12} /> : <ChevronRight size={12} />}
                   </td>
                 </tr>
-                {expanded === stock.symbol && (
+                {expanded === stock.symbol && (() => {
+                  // Merge enrichCache into a display copy — triggers re-render when enrichCache updates
+                  const s = { ...stock, ...(enrichCache[stock.symbol] ?? {}) };
+                  return (
                   <tr className="bg-cyan-500/[0.03] border-b border-cyan-500/10">
                     <td colSpan={11} className="px-4 py-4">
-                      {/* Merge lazy-fetched enrichment data into stock for display */}
-                      {(() => { Object.assign(stock, enrichCache[stock.symbol] ?? {}); return null; })()}
                       <div className="space-y-3">
                         {/* Source badge */}
                         <div className="flex items-center gap-2 flex-wrap">
-                          {stock.dataQuality === 'HIGH'
+                          {s.dataQuality === 'HIGH'
                             ? <span className="text-[8px] font-black px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 tracking-widest uppercase">NSE + Screener.in · Real Fundamentals</span>
-                            : stock.dataQuality === 'MEDIUM'
+                            : s.dataQuality === 'MEDIUM'
                             ? <span className="text-[8px] font-black px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-400 border border-cyan-500/25 tracking-widest uppercase">Yahoo Finance · Real OHLCV</span>
                             : <span className="text-[8px] font-black px-2 py-0.5 rounded-full bg-zinc-700/40 text-zinc-500 border border-zinc-600/30 tracking-widest uppercase">Simulated Data</span>
                           }
-                          {stock.pChange != null && (
-                            <span className={`text-[9px] font-black ${stock.pChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                              {stock.pChange >= 0 ? '▲' : '▼'} {Math.abs(stock.pChange).toFixed(2)}% today
+                          {s.pChange != null && (
+                            <span className={`text-[9px] font-black ${s.pChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {s.pChange >= 0 ? '▲' : '▼'} {Math.abs(s.pChange).toFixed(2)}% today
                             </span>
                           )}
                         </div>
@@ -743,22 +748,22 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
                         {/* Real fundamentals grid — NSE + Screener.in */}
                         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8 text-[10px]">
                           {[
-                            { label: 'PE Ratio',       value: stock.pe != null ? stock.pe.toFixed(1) : '--',                                                    color: stock.pe != null && stock.pe > 0 && stock.pe < 25 ? 'text-emerald-400' : 'text-amber-400',   real: stock.pe != null },
-                            { label: 'ROE',            value: stock.roe != null ? `${stock.roe.toFixed(1)}%` : '--',                                             color: stock.roe != null && stock.roe >= 15 ? 'text-emerald-400' : 'text-zinc-300',                  real: stock.roe != null },
-                            { label: 'ROCE',           value: stock.roce != null ? `${stock.roce.toFixed(1)}%` : '--',                                           color: stock.roce != null && stock.roce >= 15 ? 'text-emerald-400' : 'text-zinc-300',                 real: stock.roce != null },
-                            { label: 'D/E Ratio',      value: stock.debtToEquity != null ? stock.debtToEquity.toFixed(2) : '--',                                 color: stock.debtToEquity != null && stock.debtToEquity < 0.5 ? 'text-emerald-400' : stock.debtToEquity != null && stock.debtToEquity > 1.5 ? 'text-rose-400' : 'text-zinc-300', real: stock.debtToEquity != null },
-                            { label: 'Promoter %',     value: stock.promoterHolding != null ? `${stock.promoterHolding.toFixed(1)}%` : '--',                     color: stock.promoterHolding != null && stock.promoterHolding >= 50 ? 'text-emerald-400' : 'text-zinc-300', real: stock.promoterHolding != null },
-                            { label: 'Delivery %',     value: stock.deliveryPct != null ? `${stock.deliveryPct.toFixed(1)}%` : '--',                             color: stock.deliveryPct != null && stock.deliveryPct >= 50 ? 'text-emerald-400' : 'text-zinc-300',  real: stock.deliveryPct != null },
-                            { label: '52W High',       value: stock.weekHigh52 != null ? `₹${Number(stock.weekHigh52).toLocaleString('en-IN')}` : '--',          color: 'text-cyan-300',   real: stock.weekHigh52 != null },
-                            { label: '52W Low',        value: stock.weekLow52 != null ? `₹${Number(stock.weekLow52).toLocaleString('en-IN')}` : '--',            color: 'text-zinc-400',   real: stock.weekLow52 != null },
-                            { label: 'Fund. Score',    value: stock.fundamentalScore != null ? `${stock.fundamentalScore.toFixed(0)}/100` : '--',                color: stock.fundamentalScore != null && stock.fundamentalScore >= 65 ? 'text-emerald-400' : 'text-amber-400', real: stock.fundamentalScore != null },
-                            { label: 'Profit Growth',  value: `${stock.earningsGrowth.toFixed(1)}%`,                                                            color: stock.earningsGrowth >= 15 ? 'text-emerald-400' : 'text-cyan-400',                            real: stock.dataQuality === 'HIGH' },
-                            { label: 'Sales Growth',   value: `${stock.revenueGrowth.toFixed(1)}%`,                                                             color: stock.revenueGrowth >= 10 ? 'text-emerald-400' : 'text-cyan-300',                             real: stock.dataQuality === 'HIGH' },
-                            { label: 'Vol Growth',     value: `${stock.volumeGrowth.toFixed(1)}%`,                                                              color: 'text-amber-400',  real: (stock as any).dataSource === 'real' },
-                            { label: 'Max Drawdown',   value: `${stock.maxDrawdown.toFixed(1)}%`,                                                               color: stock.maxDrawdown <= 25 ? 'text-emerald-400' : 'text-rose-400', real: (stock as any).dataSource === 'real' },
-                            { label: 'Breakout Freq',  value: `${(stock.breakoutFrequency * 100).toFixed(1)}%`,                                                 color: 'text-amber-400',  real: (stock as any).dataSource === 'real' },
-                            { label: 'LSTM Target',    value: stock.lstmPredictedPrice != null ? `₹${stock.lstmPredictedPrice.toFixed(0)}` : '—',              color: 'text-cyan-300',   real: stock.lstmPredictedPrice != null && (stock as any).dataSource === 'real' },
-                            { label: 'HMM State',      value: stock.marketState,                                                                                color: 'text-amber-300',  real: false },
+                            { label: 'PE Ratio',       value: s.pe != null ? s.pe.toFixed(1) : '--',                                                    color: s.pe != null && s.pe > 0 && s.pe < 25 ? 'text-emerald-400' : 'text-amber-400',   real: s.pe != null },
+                            { label: 'ROE',            value: s.roe != null ? `${s.roe.toFixed(1)}%` : '--',                                             color: s.roe != null && s.roe >= 15 ? 'text-emerald-400' : 'text-zinc-300',                  real: s.roe != null },
+                            { label: 'ROCE',           value: s.roce != null ? `${s.roce.toFixed(1)}%` : '--',                                           color: s.roce != null && s.roce >= 15 ? 'text-emerald-400' : 'text-zinc-300',                 real: s.roce != null },
+                            { label: 'D/E Ratio',      value: s.debtToEquity != null ? s.debtToEquity.toFixed(2) : '--',                                 color: s.debtToEquity != null && s.debtToEquity < 0.5 ? 'text-emerald-400' : s.debtToEquity != null && s.debtToEquity > 1.5 ? 'text-rose-400' : 'text-zinc-300', real: s.debtToEquity != null },
+                            { label: 'Promoter %',     value: s.promoterHolding != null ? `${s.promoterHolding.toFixed(1)}%` : '--',                     color: s.promoterHolding != null && s.promoterHolding >= 50 ? 'text-emerald-400' : 'text-zinc-300', real: s.promoterHolding != null },
+                            { label: 'Delivery %',     value: s.deliveryPct != null ? `${s.deliveryPct.toFixed(1)}%` : '--',                             color: s.deliveryPct != null && s.deliveryPct >= 50 ? 'text-emerald-400' : 'text-zinc-300',  real: s.deliveryPct != null },
+                            { label: '52W High',       value: s.weekHigh52 != null ? `₹${Number(s.weekHigh52).toLocaleString('en-IN')}` : '--',          color: 'text-cyan-300',   real: s.weekHigh52 != null },
+                            { label: '52W Low',        value: s.weekLow52 != null ? `₹${Number(s.weekLow52).toLocaleString('en-IN')}` : '--',            color: 'text-zinc-400',   real: s.weekLow52 != null },
+                            { label: 'Fund. Score',    value: s.fundamentalScore != null ? `${s.fundamentalScore.toFixed(0)}/100` : '--',                color: s.fundamentalScore != null && s.fundamentalScore >= 65 ? 'text-emerald-400' : 'text-amber-400', real: s.fundamentalScore != null },
+                            { label: 'Profit Growth',  value: `${s.earningsGrowth.toFixed(1)}%`,                                                        color: s.earningsGrowth >= 15 ? 'text-emerald-400' : 'text-cyan-400',                            real: s.dataQuality === 'HIGH' },
+                            { label: 'Sales Growth',   value: `${s.revenueGrowth.toFixed(1)}%`,                                                         color: s.revenueGrowth >= 10 ? 'text-emerald-400' : 'text-cyan-300',                             real: s.dataQuality === 'HIGH' },
+                            { label: 'Vol Growth',     value: `${s.volumeGrowth.toFixed(1)}%`,                                                          color: 'text-amber-400',  real: (s as any).dataSource === 'real' },
+                            { label: 'Max Drawdown',   value: `${s.maxDrawdown.toFixed(1)}%`,                                                           color: s.maxDrawdown <= 25 ? 'text-emerald-400' : 'text-rose-400', real: (s as any).dataSource === 'real' },
+                            { label: 'Breakout Freq',  value: `${(s.breakoutFrequency * 100).toFixed(1)}%`,                                             color: 'text-amber-400',  real: (s as any).dataSource === 'real' },
+                            { label: 'LSTM Target',    value: s.lstmPredictedPrice != null ? `₹${s.lstmPredictedPrice.toFixed(0)}` : '—',              color: 'text-cyan-300',   real: s.lstmPredictedPrice != null && (s as any).dataSource === 'real' },
+                            { label: 'HMM State',      value: s.marketState,                                                                            color: 'text-amber-300',  real: false },
                           ].map(m => (
                             <div key={m.label} className={`rounded-xl border px-2.5 py-2 ${m.real ? 'bg-emerald-500/[0.04] border-emerald-500/15' : 'bg-white/[0.03] border-white/5'}`}>
                               <p className="text-zinc-500 uppercase tracking-[0.1em] mb-0.5 text-[7px] flex items-center gap-1">
@@ -770,15 +775,15 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
                         </div>
 
                         {/* Superbrain AI Decision */}
-                        {(stock as any).superbrain && (
-                          <SuperbrainPanel sb={(stock as any).superbrain} price={(stock as any).currentPrice} />
+                        {(s as any).superbrain && (
+                          <SuperbrainPanel sb={(s as any).superbrain} price={(s as any).currentPrice} />
                         )}
 
                         {/* News headlines from Google Finance */}
-                        {stock.newsHeadlines && stock.newsHeadlines.length > 0 && (
+                        {s.newsHeadlines && s.newsHeadlines.length > 0 && (
                           <div className="rounded-xl bg-white/[0.02] border border-white/5 px-3 py-2.5 space-y-1">
                             <p className="text-[8px] font-black uppercase tracking-[0.15em] text-zinc-500 mb-1.5">Latest News · Google Finance</p>
-                            {stock.newsHeadlines.slice(0, 3).map((h, idx) => (
+                            {s.newsHeadlines.slice(0, 3).map((h, idx) => (
                               <p key={idx} className="text-[9px] text-zinc-400 leading-4">• {h}</p>
                             ))}
                           </div>
@@ -786,7 +791,8 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
                       </div>
                     </td>
                   </tr>
-                )}
+                  );
+                })()}
               </React.Fragment>
             ))}
           </tbody>
