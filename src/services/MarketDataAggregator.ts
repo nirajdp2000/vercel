@@ -181,55 +181,68 @@ export async function fetchScreenerFundamentals(symbol: string): Promise<Screene
   const cached = screenerCache.get(symbol);
   if (cached && cached.expiresAt > Date.now()) return cached.data;
 
-  try {
-    // Screener.in public company JSON — no auth needed
-    const url = `https://www.screener.in/api/company/${encodeURIComponent(symbol)}/`;
-    const resp = await axios.get(url, {
-      timeout: HTTP_TIMEOUT,
-      headers: {
-        'User-Agent': UA,
-        'Accept': 'application/json',
-        'Referer': 'https://www.screener.in',
-      },
-    });
+  // Screener.in uses NSE symbol for most stocks, but BSE-only stocks may need
+  // a different lookup. Try multiple formats in order.
+  const symbolVariants = [
+    symbol,                                    // BLOOM → try as-is first
+    symbol.replace(/-/g, ''),                  // BAJAJ-AUTO → BAJAJAUTO
+    symbol.toUpperCase(),
+  ].filter((v, i, arr) => arr.indexOf(v) === i); // deduplicate
 
-    const d = resp.data;
-    if (!d) return null;
+  for (const variant of symbolVariants) {
+    try {
+      const url = `https://www.screener.in/api/company/${encodeURIComponent(variant)}/`;
+      const resp = await axios.get(url, {
+        timeout: HTTP_TIMEOUT,
+        headers: {
+          'User-Agent': UA,
+          'Accept': 'application/json',
+          'Referer': 'https://www.screener.in',
+        },
+      });
 
-    // Screener JSON structure: ratios array with name/value pairs
-    const ratios: Array<{ name: string; value: string }> = d.ratios ?? [];
-    const getVal = (name: string): number | null => {
-      const r = ratios.find(x => x.name?.toLowerCase().includes(name.toLowerCase()));
-      if (!r) return null;
-      const v = parseFloat(String(r.value ?? '').replace(/[,%]/g, '').trim());
-      return isNaN(v) ? null : v;
-    };
+      const d = resp.data;
+      if (!d || typeof d !== 'object') continue;
 
-    // Compounded growth from separate arrays
-    const salesGrowth  = d.compounded_sales_growth?.find((x: any) => x.name === '3 Years')?.value ?? null;
-    const profitGrowth = d.compounded_profit_growth?.find((x: any) => x.name === '3 Years')?.value ?? null;
-    const promoterData = d.shareholding?.find((x: any) => x.name?.toLowerCase().includes('promoter'));
-    const promoterPct  = promoterData?.value ? parseFloat(String(promoterData.value).replace('%', '')) : null;
+      // Screener JSON structure: ratios array with name/value pairs
+      const ratios: Array<{ name: string; value: string }> = d.ratios ?? [];
+      if (ratios.length === 0) continue; // empty response — try next variant
 
-    const data: ScreenerFundamentals = {
-      symbol,
-      pe:               getVal('P/E') ?? getVal('price to earning'),
-      roe:              getVal('ROE') ?? getVal('return on equity'),
-      roce:             getVal('ROCE') ?? getVal('return on capital'),
-      debtToEquity:     getVal('Debt to equity') ?? getVal('D/E'),
-      promoterHolding:  isNaN(promoterPct as number) ? null : promoterPct,
-      salesGrowth3yr:   salesGrowth ? parseFloat(String(salesGrowth).replace('%', '')) : null,
-      profitGrowth3yr:  profitGrowth ? parseFloat(String(profitGrowth).replace('%', '')) : null,
-      dividendYield:    getVal('Dividend Yield'),
-      currentRatio:     getVal('Current ratio'),
-      dataSource:       'SCREENER',
-    };
+      const getVal = (name: string): number | null => {
+        const r = ratios.find(x => x.name?.toLowerCase().includes(name.toLowerCase()));
+        if (!r) return null;
+        const v = parseFloat(String(r.value ?? '').replace(/[,%]/g, '').trim());
+        return isNaN(v) ? null : v;
+      };
 
-    screenerCache.set(symbol, { data, expiresAt: Date.now() + SCREENER_TTL });
-    return data;
-  } catch (_e) {
-    return null;
+      // Compounded growth from separate arrays
+      const salesGrowth  = d.compounded_sales_growth?.find((x: any) => x.name === '3 Years')?.value ?? null;
+      const profitGrowth = d.compounded_profit_growth?.find((x: any) => x.name === '3 Years')?.value ?? null;
+      const promoterData = d.shareholding?.find((x: any) => x.name?.toLowerCase().includes('promoter'));
+      const promoterPct  = promoterData?.value ? parseFloat(String(promoterData.value).replace('%', '')) : null;
+
+      const data: ScreenerFundamentals = {
+        symbol,
+        pe:               getVal('P/E') ?? getVal('price to earning'),
+        roe:              getVal('ROE') ?? getVal('return on equity'),
+        roce:             getVal('ROCE') ?? getVal('return on capital'),
+        debtToEquity:     getVal('Debt to equity') ?? getVal('D/E'),
+        promoterHolding:  isNaN(promoterPct as number) ? null : promoterPct,
+        salesGrowth3yr:   salesGrowth ? parseFloat(String(salesGrowth).replace('%', '')) : null,
+        profitGrowth3yr:  profitGrowth ? parseFloat(String(profitGrowth).replace('%', '')) : null,
+        dividendYield:    getVal('Dividend Yield'),
+        currentRatio:     getVal('Current ratio'),
+        dataSource:       'SCREENER',
+      };
+
+      screenerCache.set(symbol, { data, expiresAt: Date.now() + SCREENER_TTL });
+      return data;
+    } catch (_e) {
+      continue; // try next variant
+    }
   }
+
+  return null;
 }
 
 // ─── 3. NSE FII/DII (public CSV) ─────────────────────────────────────────────

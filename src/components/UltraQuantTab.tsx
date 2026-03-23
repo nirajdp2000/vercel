@@ -632,7 +632,7 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
               ))}
               <th className="px-3 py-3">Price</th>
               <th className="px-3 py-3">Regime</th>
-              <th className="px-3 py-3">Signal</th>
+              <th className="px-3 py-3" title="Superbrain AI decision — fuses technical, fundamental, sentiment, macro and momentum signals">Signal ✦</th>
               <th className="px-3 py-3 w-8"></th>
             </tr>
           </thead>
@@ -688,8 +688,7 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
                       : <span className="text-[10px] text-zinc-600" title="Price unavailable — stock not found on Yahoo Finance">—</span>
                     }
                   </td>
-                  <td className="px-3 py-3"><SignalPill action={stock.rlAction} /></td>
-                  <td className="px-3 py-3 text-zinc-600">
+                  <td className="px-3 py-3"><SignalPill action={(stock as any).superbrain?.decision ?? stock.rlAction} /></td>                  <td className="px-3 py-3 text-zinc-600">
                     {expanded === stock.symbol ? <ChevronUp size={12} /> : <ChevronRight size={12} />}
                   </td>
                 </tr>

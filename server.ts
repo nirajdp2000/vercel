@@ -1166,7 +1166,8 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
     })();
     const marketRegime = volatility > 0.04 ? "High Volatility" : Math.abs(trendStrength) > 2 ? "Trending" : "Sideways";
     const marketState = recentVolumeRatio > 1.8 && priceChange5m > 0 ? "Accumulation" : breakoutFrequency > 0.12 ? "Breakout" : priceChange5m < -1 ? "Distribution" : "Reversal";
-    const rlAction = gradientBoost > 0.72 && sentimentScore > 65 ? "BUY" : gradientBoost < 0.35 ? "SELL" : "HOLD";
+    // rlAction is derived AFTER superbrain runs (see return object below) — placeholder here
+    const rlActionPrelim: "BUY" | "SELL" | "HOLD" = gradientBoost > 0.72 && sentimentScore > 65 ? "BUY" : gradientBoost < 0.35 ? "SELL" : "HOLD";
     const orderBook = createOrderBook(profile.symbol, endPrice);
     const totalBidVolume = orderBook.bids.reduce((sum, level) => sum + level.volume, 0);
     const totalAskVolume = orderBook.asks.reduce((sum, level) => sum + level.volume, 0);
@@ -1250,7 +1251,10 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
         if (realCandles && realCandles.length >= 60) return Number(endPrice.toFixed(2));
         return null;
       })(),
-      dataSource: enrichedData?.yahoo ? 'real' : (realCandles && realCandles.length >= 60) ? 'real' : 'synthetic',
+      dataSource: enrichedData?.yahoo ? 'real' : (realCandles && realCandles.length >= 60) ? 'real' : (() => {
+        const cached = perSymbolPriceCache.get(profile.symbol);
+        return (cached && cached.expiresAt > Date.now()) ? 'real' : 'synthetic';
+      })(),
       // Enriched fields from Yahoo + Screener.in
       pe: enrichedData?.yahoo?.pe ?? enrichedData?.screener?.pe ?? null,
       pb: enrichedData?.yahoo?.priceToBook ?? null,
@@ -1263,7 +1267,11 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
       deliveryPct: null,
       pChange: enrichedData?.yahoo?.pChange ?? ohlcvChangePct ?? (perSymbolPriceCache.get(profile.symbol)?.changePct ?? null),
       fundamentalScore: enrichedData ? computeFundamentalScore(enrichedData) : null,
-      dataQuality: enrichedData?.dataQuality ?? (realCandles && realCandles.length >= 60 ? 'MEDIUM' : 'LOW'),
+      dataQuality: enrichedData?.dataQuality ?? (() => {
+        // Upgrade to MEDIUM if we have real OHLCV candles or a live price from cache
+        const hasCachedPrice = !!(perSymbolPriceCache.get(profile.symbol)?.expiresAt ?? 0 > Date.now());
+        return (realCandles && realCandles.length >= 60) || ohlcvLivePrice || hasCachedPrice ? 'MEDIUM' : 'LOW';
+      })(),
       newsHeadlines: enrichedData?.newsHeadlines ?? [],
       cagr,
       momentum,
@@ -1290,18 +1298,14 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
         // scale the LSTM projection proportionally so the target is relative to live price
         const realBase = enrichedData?.yahoo?.lastPrice ?? ohlcvLivePrice ?? (cachedPrice?.expiresAt ?? 0 > Date.now() ? cachedPrice?.price : null) ?? null;
         if (realBase && realBase > 0 && endPrice > 0 && Math.abs(realBase - endPrice) / endPrice > 0.005) {
-          // Scale: lstmPredictedPrice was computed relative to endPrice (EOD close)
-          // Adjust it to be relative to realBase (live price)
           const ratio = realBase / endPrice;
           const scaledTarget = lstmPredictedPrice * ratio;
-          // Re-apply ±25% cap relative to realBase
           return Number(Math.min(realBase * 1.25, Math.max(realBase * 0.75, scaledTarget)).toFixed(2));
         }
         return Number(lstmPredictedPrice.toFixed(2));
       })(),
       marketRegime,
       marketState,
-      rlAction,
       finalPredictionScore,
       orderImbalance,
       volumeProfile: {
@@ -1321,31 +1325,55 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
         institutionalRaw: hedgeInstitutionalRaw,
         breakoutRaw: hedgeBreakoutRaw
       },
-      superbrain: runSuperbrain({
-        symbol: profile.symbol, sector: profile.sector, marketCap: profile.marketCap,
-        cagr, momentum, trendStrength, volatility, maxDrawdown, breakoutFrequency,
-        volumeGrowth, gradientBoostProb: gradientBoost * 100, finalPredictionScore,
-        rlAction, orderImbalance, vwapDistance,
-        pe: enrichedData?.yahoo?.pe ?? enrichedData?.screener?.pe ?? null,
-        roe: enrichedData?.screener?.roe ?? null,
-        roce: enrichedData?.screener?.roce ?? null,
-        debtToEquity: enrichedData?.screener?.debtToEquity ?? null,
-        promoterHolding: enrichedData?.screener?.promoterHolding ?? null,
-        profitGrowth3yr: enrichedData?.screener?.profitGrowth3yr ?? null,
-        salesGrowth3yr: enrichedData?.screener?.salesGrowth3yr ?? null,
-        fundamentalScore: enrichedData ? computeFundamentalScore(enrichedData) : null,
-        sentimentScore, newsHeadlines: enrichedData?.newsHeadlines ?? [],
-        pChange: enrichedData?.yahoo?.pChange ?? null,
-        dataQuality: (enrichedData?.dataQuality ?? (realCandles && realCandles.length >= 60 ? 'MEDIUM' : 'LOW')) as 'HIGH' | 'MEDIUM' | 'LOW',
-        dataSource: (enrichedData?.yahoo ? 'real' : (realCandles && realCandles.length >= 60) ? 'real' : 'synthetic') as 'real' | 'synthetic',
-      // Pass real price only — null for synthetic so Superbrain suppresses targets
-      }, (() => {
-        const cached = perSymbolPriceCache.get(profile.symbol);
-        return enrichedData?.yahoo?.lastPrice
-          ?? ohlcvLivePrice
-          ?? ((cached?.expiresAt ?? 0) > Date.now() ? cached!.price : null)
-          ?? ((realCandles && realCandles.length >= 60) ? endPrice : null);
-      })()),
+      // ── Compute Superbrain first, then derive rlAction from its decision ──
+      // This ensures the stock signal (table column) always matches Superbrain AI.
+      // Previously rlAction was a simple 2-condition rule that often disagreed.
+      ...(() => {
+        const resolvedDataSource = (enrichedData?.yahoo ? 'real' : (realCandles && realCandles.length >= 60) ? 'real' : (() => {
+          const cached = perSymbolPriceCache.get(profile.symbol);
+          return (cached && cached.expiresAt > Date.now()) ? 'real' : 'synthetic';
+        })()) as 'real' | 'synthetic';
+        const resolvedDataQuality = (enrichedData?.dataQuality ?? (() => {
+          const hasCachedPrice = !!(perSymbolPriceCache.get(profile.symbol)?.expiresAt ?? 0 > Date.now());
+          return (realCandles && realCandles.length >= 60) || ohlcvLivePrice || hasCachedPrice ? 'MEDIUM' : 'LOW';
+        })()) as 'HIGH' | 'MEDIUM' | 'LOW';
+        const resolvedPrice = (() => {
+          const cached = perSymbolPriceCache.get(profile.symbol);
+          return enrichedData?.yahoo?.lastPrice
+            ?? ohlcvLivePrice
+            ?? ((cached?.expiresAt ?? 0) > Date.now() ? cached!.price : null)
+            ?? ((realCandles && realCandles.length >= 60) ? endPrice : null);
+        })();
+
+        const sb = runSuperbrain({
+          symbol: profile.symbol, sector: profile.sector, marketCap: profile.marketCap,
+          cagr, momentum, trendStrength, volatility, maxDrawdown, breakoutFrequency,
+          volumeGrowth, gradientBoostProb: gradientBoost * 100, finalPredictionScore,
+          rlAction: rlActionPrelim, orderImbalance, vwapDistance,
+          pe: enrichedData?.yahoo?.pe ?? enrichedData?.screener?.pe ?? null,
+          roe: enrichedData?.screener?.roe ?? null,
+          roce: enrichedData?.screener?.roce ?? null,
+          debtToEquity: enrichedData?.screener?.debtToEquity ?? null,
+          promoterHolding: enrichedData?.screener?.promoterHolding ?? null,
+          profitGrowth3yr: enrichedData?.screener?.profitGrowth3yr ?? null,
+          salesGrowth3yr: enrichedData?.screener?.salesGrowth3yr ?? null,
+          fundamentalScore: enrichedData ? computeFundamentalScore(enrichedData) : null,
+          sentimentScore, newsHeadlines: enrichedData?.newsHeadlines ?? [],
+          pChange: enrichedData?.yahoo?.pChange ?? ohlcvChangePct ?? null,
+          dataQuality: resolvedDataQuality,
+          dataSource: resolvedDataSource,
+        }, resolvedPrice);
+
+        // Sync rlAction with Superbrain decision so both signals always agree
+        const rlAction: "BUY" | "SELL" | "HOLD" =
+          sb.decision === 'STRONG_BUY' ? 'BUY' :
+          sb.decision === 'BUY'        ? 'BUY' :
+          sb.decision === 'SELL'       ? 'SELL' :
+          sb.decision === 'STRONG_SELL'? 'SELL' :
+          'HOLD';
+
+        return { rlAction, superbrain: sb };
+      })(),
     };
   };
 
