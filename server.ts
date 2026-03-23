@@ -1577,13 +1577,12 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
 
   // Fetch today's intraday candles from Upstox v3 intraday endpoint
   // URL: /v3/historical-candle/intraday/{instrument}/{unit}/{n}
+  // Works for all intervals including day (returns today's in-progress daily candle)
   const fetchV3Intraday = async (
     token: string,
     instrumentKey: string,
     iv: string
   ): Promise<any[]> => {
-    const isIntraday = iv !== "day" && iv !== "week" && iv !== "month";
-    if (!isIntraday) return []; // intraday endpoint only for sub-day intervals
     const { unit, n } = toV3Interval(iv);
     const encodedKey = encodeURIComponent(instrumentKey);
     const url = `https://api.upstox.com/v3/historical-candle/intraday/${encodedKey}/${unit}/${n}`;
@@ -1633,8 +1632,10 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
 
     try {
       const todayStr = new Date().toISOString().slice(0, 10);
-      const isIntradayInterval = selectedInterval !== "day" && selectedInterval !== "week" && selectedInterval !== "month";
       const toIsToday = to === todayStr;
+      // Use intraday endpoint for any interval (including day) when toDate === today
+      // Upstox historical endpoint never returns today's in-progress candle
+      const needsIntradayToday = toIsToday && selectedInterval !== "week" && selectedInterval !== "month";
 
       // Paginate if date range exceeds per-chunk limit
       const chunkDays = maxDaysPerChunk(selectedInterval);
@@ -1644,7 +1645,7 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
 
       let allCandles: any[] = [];
 
-      if (isIntradayInterval && toIsToday) {
+      if (needsIntradayToday) {
         // For intraday intervals requesting today's data:
         // 1. Fetch historical candles for past days (from → yesterday)
         // 2. Fetch today's candles via intraday endpoint

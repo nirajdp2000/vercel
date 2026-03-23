@@ -1,14 +1,10 @@
-fix: normalize candle order to newest-first so App.tsx reverse works correctly
+fix: include today's candle for 1D interval — prices now consistent across timeframes
 
-The intraday endpoint returns oldest-first while historical returns newest-first.
-After merging them, the array was inconsistently ordered causing the chart to
-show wrong/reversed data.
+Root cause: Upstox historical endpoint never returns today's in-progress candle
+for ANY interval (not just intraday). So 1D was showing Friday's close (1414)
+while 5M was showing today's live close (1394) — a visible price mismatch.
 
-Fix: sort allCandles by timestamp descending (newest-first) before returning,
-matching Upstox historical convention. App.tsx .reverse() then correctly
-produces oldest-first for chart rendering.
+Fix: extend needsIntradayToday to cover day interval too (only week/month excluded).
+Now 1D fetches past days via historical + today's daily candle via intraday endpoint.
 
-Verified:
-- 5min today only: newest-first, last candle = current time IST
-- 5min 28 days: newest-first, last candle = current time IST
-- day interval: newest-first, unchanged behavior
+Verified: HDFC Bank 1D shows 23/3/2026 close 754.55, 5M shows 754.25 — consistent.
