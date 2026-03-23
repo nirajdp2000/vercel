@@ -25,6 +25,7 @@ type AnalysisResult = {
   gradientBoostProb: number; lstmPredictedPrice: number;
   marketRegime: string; marketState: string; rlAction: string;
   finalPredictionScore: number; orderImbalance: number;
+  currentPrice?: number;
   volumeProfile?: { poc?: number; vah?: number; val?: number };
   alerts: Array<{ stockSymbol: string; signalType: string; confidenceScore: number; timestamp: string }>;
 };
@@ -499,6 +500,7 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
           <thead className="sticky top-0 bg-zinc-950/98 text-[9px] font-bold uppercase tracking-[0.18em] text-zinc-500 border-b border-white/5">
             <tr>
               <th className="px-4 py-3">Stock</th>
+              <th className="px-3 py-3">Price</th>
               {cols.map(c => (
                 <th key={String(c.key)} title={c.tip} className="cursor-pointer px-3 py-3 text-left hover:text-zinc-300 transition-colors"
                   onClick={() => { setSortKey(c.key); setSortDir(d => sortKey === c.key ? (d === 'desc' ? 'asc' : 'desc') : 'desc'); }}>
@@ -528,6 +530,9 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
                         <p className="text-[9px] text-zinc-500">{stock.sector}</p>
                       </div>
                     </div>
+                  </td>
+                  <td className="px-3 py-3 text-[11px] font-black text-amber-300 whitespace-nowrap">
+                    {stock.currentPrice != null ? `₹${stock.currentPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
                   </td>
                   <td className="px-3 py-3 w-20">
                     <div className="space-y-1">
@@ -559,7 +564,7 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
                 </tr>
                 {expanded === stock.symbol && (
                   <tr className="bg-cyan-500/[0.03] border-b border-cyan-500/10">
-                    <td colSpan={10} className="px-4 py-4">
+                    <td colSpan={11} className="px-4 py-4">
                       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-6 text-[10px]">
                         {[
                           { label: 'Growth Ratio',    value: `${stock.growthRatio.toFixed(2)}x`,                    color: 'text-emerald-400' },

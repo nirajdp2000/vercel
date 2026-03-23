@@ -570,6 +570,7 @@ const MultibaggerScanner: React.FC = () => {
                     <th className="px-4 py-4">Symbol</th>
                     <th className="px-4 py-4">Company</th>
                     <th className="px-4 py-4">Sector</th>
+                    <th className="px-4 py-4">Price</th>
                     <th className="px-4 py-4">Score</th>
                     <th className="px-4 py-4">Trend</th>
                     <th className="px-4 py-4">Momentum</th>
@@ -604,6 +605,9 @@ const MultibaggerScanner: React.FC = () => {
                         <td className="px-4 py-3 font-bold text-white">{cleanSymbol(stock.symbol)}</td>
                         <td className="px-4 py-3 text-zinc-300 max-w-[9rem] truncate text-xs">{stock.companyName}</td>
                         <td className="px-4 py-3 text-zinc-400 text-xs uppercase tracking-[0.12em]">{stock.sector}</td>
+                        <td className="px-4 py-3 font-black text-xs text-amber-300 whitespace-nowrap">
+                          {stock.currentPrice != null ? `₹${stock.currentPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
+                        </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
                             <span className={`font-black text-base ${scoreTone(stock.bullishScore)}`}>

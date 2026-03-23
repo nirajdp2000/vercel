@@ -22,6 +22,8 @@ export interface MultibaggerStock {
   symbol: string;
   companyName: string;
   sector: string;
+  /** Current simulated price (last close of the generated series) */
+  currentPrice: number;
 
   // ── Composite score ──────────────────────────────────────────────────────
   /** Final weighted bullish score 0–100 */
