@@ -647,26 +647,17 @@ setFallbackUniverse(NSE_STOCK_UNIVERSE.map(s => ({
   instrumentKey: `NSE_EQ|${s.symbol}`,
 })));
 
-const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
-  // Use the full Supabase universe (5221 NSE+BSE stocks).
-  // Missing fields are filled with sensible defaults so scoring engines work correctly.
-  // NSE_STOCK_UNIVERSE is used as an enrichment overlay — if a symbol exists in both,
-  // the curated data (sector/industry/marketCap/volume) takes priority.
-  const supabaseStocks = await getUniverseAsync();
-
-  // Build a lookup map from the curated list for enrichment
-  const curatedMap = new Map(NSE_STOCK_UNIVERSE.map(s => [s.symbol, s]));
-
-  return supabaseStocks.map(s => {
-    const curated = curatedMap.get(s.symbol);
-    return {
-      symbol:        s.symbol,
-      sector:        curated?.sector  || s.sector  || 'Unknown',
-      industry:      curated?.industry || s.industry || 'Unknown',
-      marketCap:     curated?.marketCap     || (s.marketCap     > 0 ? s.marketCap     : 1000),
-      averageVolume: curated?.averageVolume || (s.averageVolume > 0 ? s.averageVolume : 100000),
-    };
-  });
+const createUltraQuantUniverse = (): UltraQuantProfile[] => {
+  // Use the embedded curated NSE universe directly — no Supabase, no network.
+  // This is the only safe option for Vercel's 10s function timeout.
+  // The curated list has ~440 stocks with accurate sector/industry/marketCap data.
+  return NSE_STOCK_UNIVERSE.map(s => ({
+    symbol:        s.symbol,
+    sector:        s.sector,
+    industry:      s.industry,
+    marketCap:     s.marketCap,
+    averageVolume: s.averageVolume,
+  }));
 };
 
 
@@ -999,6 +990,7 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
       ? Math.max(0, enrichedData.screener.salesGrowth3yr)
       : Math.max(0, cagr * 0.58 + random() * 14);
     const recentVolume = average(candles.slice(-Math.max(20, Math.floor(candles.length / 10))).map((candle) => candle.volume));
+    const earlyVolume = average(candles.slice(0, Math.max(20, Math.floor(candles.length / 10))).map((candle) => candle.volume));
     const volumeGrowth = earlyVolume > 0 ? recentVolume / earlyVolume : 1;
 
     let breakoutHits = 0;
@@ -1355,42 +1347,60 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
     return result;
   };
 
+  // ── UltraQuant dashboard result cache (TTL: 60s) ─────────────────────────
+  const ultraQuantCache = new Map<string, { expiresAt: number; payload: any }>();
+  const ULTRA_QUANT_CACHE_TTL = 60_000; // 60 seconds
+
   const buildUltraQuantDashboard = async (payload: UltraQuantRequest = {}) => {
     const request = normalizeUltraQuantRequest(payload);
-    const rawUniverse = await createUltraQuantUniverse();
+
+    // Cache key based on request params
+    const cacheKey = JSON.stringify(request);
+    const cached = ultraQuantCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.payload;
+
+    const rawUniverse = createUltraQuantUniverse();
     const totalLoaded = rawUniverse.length;
 
-    // ── Pass 1: Score entire universe with synthetic data (fast, no network) ──
-    const syntheticUniverse = rawUniverse
-      .map((profile) => analyzeUltraQuantProfile(profile, request, null));
+    // ── Pass 1: Lightweight pre-score entire universe (CAGR + momentum only, no EMA/VP/OB) ──
+    // This is ~10x faster than full analyzeUltraQuantProfile
+    const preSorted = rawUniverse.map(profile => {
+      const random = seededGenerator(symbolSeed(profile.symbol));
+      const totalDays = Math.max(260, request.historicalPeriodYears * 252);
+      const sectorDrift = ({
+        Technology: 0.00165, Financials: 0.0012, Energy: 0.0011,
+        Healthcare: 0.00145, Consumer: 0.00115, Industrials: 0.00105,
+        Telecom: 0.001, Materials: 0.00095
+      } as Record<string, number>)[profile.sector] ?? 0.001;
 
-    // Sort by synthetic score, take top 150 candidates
-    const top150Symbols = new Set(
-      [...syntheticUniverse]
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 150)
-        .map(r => r.symbol)
-    );
+      let close = 80 + random() * 1800;
+      const startPrice = close;
+      for (let d = 0; d < totalDays; d++) {
+        const drift = sectorDrift + Math.sin(d / 31 + random()) * 0.006 + (random() - 0.5) * 0.05;
+        close = Math.max(20, close * (1 + drift));
+      }
+      const cagr = startPrice > 0 ? (Math.pow(close / startPrice, 1 / request.historicalPeriodYears) - 1) * 100 : 0;
+      return { symbol: profile.symbol, cagr };
+    }).sort((a, b) => b.cagr - a.cagr);
+
+    // Take top 100 for full analysis
+    const top100Symbols = new Set(preSorted.slice(0, 100).map(r => r.symbol));
+    const top100Universe = rawUniverse.filter(p => top100Symbols.has(p.symbol));
 
     // ── Pass 2: Read real OHLCV from cache only (zero network — warmed in background) ──
     const realOHLCVMap = new Map<string, UltraQuantCandle[] | null>();
-    const top150 = rawUniverse.filter(p => top150Symbols.has(p.symbol));
-    top150.forEach(p => {
+    top100Universe.forEach(p => {
       realOHLCVMap.set(p.symbol, getOHLCVFromCache(p.symbol));
     });
 
     // ── Pass 3: Enrich top 50 — read from cache only (zero network, safe for Vercel) ──
-    const top50Symbols = [...syntheticUniverse]
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 50)
-      .map(r => r.symbol);
-    // Build enriched map from cache (no await, no network)
+    const top50Symbols = preSorted.slice(0, 50).map(r => r.symbol);
     const enrichedMap = new Map<string, EnrichedStockData>(
       top50Symbols.map(s => [s, getEnrichedFromCache(s)])
     );
 
-    // ── Pass 4: Re-score top 150 with real OHLCV + enriched fundamentals ──
-    const analyzedUniverse = rawUniverse.map((profile) =>
+    // ── Pass 4: Full analysis on top 100 only (with real OHLCV + enriched data) ──
+    const analyzedUniverse = top100Universe.map((profile) =>
       analyzeUltraQuantProfile(
         profile,
         request,
@@ -1460,9 +1470,12 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
       architecture: ultraArchitecture
     };
 
+    // Cache the result
+    ultraQuantCache.set(cacheKey, { expiresAt: Date.now() + ULTRA_QUANT_CACHE_TTL, payload: dashboard });
+
     // Fire-and-forget background cache warm for next request — never blocks response
     enrichStocksBackground(top50Symbols).catch(() => {});
-    warmOHLCVBackground([...top150Symbols]).catch(() => {});
+    warmOHLCVBackground([...top100Symbols]).catch(() => {});
 
     return dashboard;
   };
@@ -3697,32 +3710,30 @@ Respond ONLY with this JSON structure (fill every field):
     if (cached && cached.expiresAt > Date.now()) return cached.payload;
 
     const weights  = MB_CYCLE_WEIGHTS[cycleDays];
-    const universe = await createUltraQuantUniverse();
+    const fullUniverse = createUltraQuantUniverse();
 
-    // ── Pass 1: Score full universe with synthetic data to find top candidates ──
-    const syntheticSeries = universe.map((p) => mbBuildSeries(p, cycleDays, null));
-    const synthCycleReturns = syntheticSeries.map(({ closes }) => mbRelStrengthRaw(closes, cycleDays));
-    const top150MBSymbols = new Set(
-      universe
-        .map((p, i) => ({ symbol: p.symbol, ret: synthCycleReturns[i] }))
-        .sort((a, b) => b.ret - a.ret)
-        .slice(0, 150)
-        .map(x => x.symbol)
-    );
+    // ── Pass 1: Lightweight pre-sort to find top 100 candidates ──
+    // Use a fast cycle-return estimate (no full series build) to rank stocks
+    const preScored = fullUniverse.map(p => {
+      const random = seededGenerator(symbolSeed(p.symbol));
+      let close = 80 + random() * 1800;
+      for (let d = 0; d < cycleDays; d++) {
+        close = Math.max(20, close * (1 + 0.001 + (random() - 0.5) * 0.05));
+      }
+      return { symbol: p.symbol, score: close };
+    }).sort((a, b) => b.score - a.score);
+
+    const top100MBSet = new Set(preScored.slice(0, 100).map(x => x.symbol));
+    const universe = fullUniverse.filter(p => top100MBSet.has(p.symbol));
 
     // ── Pass 2: Read real OHLCV from cache only (zero network — warmed in background) ──
     const mbRealOHLCVMap = new Map<string, UltraQuantCandle[] | null>();
-    const mbTop150 = universe.filter(p => top150MBSymbols.has(p.symbol));
-    mbTop150.forEach(p => {
+    universe.forEach(p => {
       mbRealOHLCVMap.set(p.symbol, getOHLCVFromCache(p.symbol));
     });
 
     // ── Pass 3: Enrich top 50 — read from cache only (zero network, safe for Vercel) ──
-    const mbTop50Symbols = universe
-      .map((p, i) => ({ symbol: p.symbol, ret: synthCycleReturns[i] }))
-      .sort((a, b) => b.ret - a.ret)
-      .slice(0, 50)
-      .map(x => x.symbol);
+    const mbTop50Symbols = universe.slice(0, 50).map(p => p.symbol);
     // Build enriched map from cache (no await, no network)
     const mbEnrichedMap = new Map<string, EnrichedStockData>(
       mbTop50Symbols.map(s => [s, getEnrichedFromCache(s)])
@@ -3857,7 +3868,7 @@ Respond ONLY with this JSON structure (fill every field):
 
     // Fire-and-forget background cache warm for next request — never blocks response
     enrichStocksBackground(mbTop50Symbols).catch(() => {});
-    warmOHLCVBackground([...top150MBSymbols]).catch(() => {});
+    warmOHLCVBackground(universe.map(p => p.symbol)).catch(() => {});
 
     return payload;
   };
@@ -4096,7 +4107,7 @@ Respond ONLY with this JSON structure (fill every field):
       (orbSignals?.signals ?? []).map((s: any) => [s.stock, s])
     );
 
-    const universe = await createUltraQuantUniverse();
+    const universe = createUltraQuantUniverse();
 
     // ── helpers ──────────────────────────────────────────────────────────
     const ema = (prices: number[], period: number): number[] => {
@@ -5774,12 +5785,10 @@ async function startServer() {
 // ── Serverless export for Vercel ──────────────────────────────────────────────
 export async function startServerlessApp() {
   const app = await buildApp();
-  // Eagerly load universe — await so it's ready before first request
-  try {
-    await initUniverse();
-  } catch (err: any) {
-    console.warn('[StockUniverseService] Eager init failed:', err.message);
-  }
+  // Fire universe load in background — scan uses embedded universe, doesn't need Supabase
+  initUniverse().catch(err =>
+    console.warn('[StockUniverseService] Background init failed:', err.message)
+  );
   return app;
 }
 
