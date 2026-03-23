@@ -1,23 +1,21 @@
 /**
  * MarketDataAggregator — Indian Stock Market Data
  *
- * Free sources used (no API key required):
- *
- *  1. Yahoo Finance v8  — OHLCV history + quote (primary, already proven working)
- *  2. Yahoo Finance v7  — fundamentals: PE, EPS, 52W hi/lo, market cap (same domain, free)
- *  3. NSE India CSV     — bhav copy (end-of-day price, volume, delivery%) — official public data
- *  4. Screener.in JSON  — PE, ROE, ROCE, D/E, promoter%, growth (public JSON endpoint)
- *  5. Economic Times RSS — news headlines (already in NewsIntelligenceService, reused here)
+ * Data priority (fastest → slowest):
+ *  1. In-memory cache (module-level Map, survives warm Vercel instances)
+ *  2. Supabase fundamentals_cache table (~50ms, persists across cold starts)
+ *  3. Yahoo Finance v8 chart API (~200ms, proven working on Vercel)
+ *  4. Screener.in HTML scraping (~1-2s, called lazily via /api/stock/enrich)
  *
  * Design rules for Vercel (10s function timeout):
- *  - enrichStocks() is NEVER called inside the main scan pipeline
- *  - It runs as a background cache-warmer AFTER the scan returns
- *  - All timeouts are hard-capped at 4s per request
- *  - Cache TTL: 1hr for fundamentals, 5min for quotes
- *  - On cache miss during scan → return null (graceful degradation)
+ *  - Supabase read replaces live scraping for cached fundamentals
+ *  - After live fetch, data is written back to Supabase for next cold start
+ *  - All HTTP timeouts hard-capped at 4s
+ *  - Cache TTL: 1hr in-memory, 24hr in Supabase
  */
 
 import axios from 'axios';
+import { getSupabaseClient } from '../lib/supabase.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -83,8 +81,57 @@ const SCREENER_TTL    = 60 * 60_000;   // 1 hour
 const NEWS_TTL        = 15 * 60_000;   // 15 min
 const FIIDII_TTL      = 30 * 60_000;   // 30 min
 const HTTP_TIMEOUT    = 4_000;          // 4s hard cap — Vercel safe
+const SUPABASE_TTL    = 24 * 60 * 60_000; // 24hr — Supabase cache freshness
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+// ─── Supabase fundamentals_cache helpers ─────────────────────────────────────
+
+/** Read fundamentals for multiple symbols from Supabase in one query (~50ms). */
+async function readSupabaseFundamentals(symbols: string[]): Promise<Map<string, any>> {
+  const result = new Map<string, any>();
+  try {
+    const sb = getSupabaseClient();
+    if (!sb || symbols.length === 0) return result;
+    const cutoff = Date.now() - SUPABASE_TTL;
+    const { data, error } = await sb
+      .from('fundamentals_cache')
+      .select('symbol,pe,roe,roce,debt_to_equity,promoter_holding,week_high_52,week_low_52,last_price,p_change,market_cap,book_value,dividend_yield,sales_growth_3yr,profit_growth_3yr,fetched_at')
+      .in('symbol', symbols)
+      .gt('fetched_at', cutoff);
+    if (error || !data) return result;
+    for (const row of data) result.set(row.symbol, row);
+  } catch (_e) { /* Supabase unavailable — degrade gracefully */ }
+  return result;
+}
+
+/** Write fundamentals for one symbol to Supabase (fire-and-forget, non-blocking). */
+function writeSupabaseFundamentals(symbol: string, yahoo: YahooFundamentals | null, screener: ScreenerFundamentals | null): void {
+  try {
+    const sb = getSupabaseClient();
+    if (!sb) return;
+    const row: Record<string, any> = {
+      symbol,
+      fetched_at: Date.now(),
+      pe:               yahoo?.pe               ?? screener?.pe               ?? null,
+      week_high_52:     yahoo?.weekHigh52        ?? null,
+      week_low_52:      yahoo?.weekLow52         ?? null,
+      last_price:       yahoo?.lastPrice         ?? null,
+      p_change:         yahoo?.pChange           ?? null,
+      market_cap:       yahoo?.marketCap         ?? null,
+      book_value:       yahoo?.bookValue         ?? null,
+      dividend_yield:   yahoo?.dividendYield     ?? screener?.dividendYield   ?? null,
+      roe:              screener?.roe            ?? null,
+      roce:             screener?.roce           ?? null,
+      debt_to_equity:   screener?.debtToEquity   ?? null,
+      promoter_holding: screener?.promoterHolding ?? null,
+      sales_growth_3yr: screener?.salesGrowth3yr  ?? null,
+      profit_growth_3yr:screener?.profitGrowth3yr ?? null,
+    };
+    // Non-blocking — don't await, don't let errors surface
+    sb.from('fundamentals_cache').upsert(row, { onConflict: 'symbol' }).then(() => {}).catch(() => {});
+  } catch (_e) {}
+}
 
 // ─── 1. Yahoo Finance Fundamentals (v7 quoteSummary) ─────────────────────────
 // Same domain as OHLCV — already proven to work, no cookie needed
@@ -165,6 +212,8 @@ export async function fetchYahooFundamentals(symbol: string): Promise<YahooFunda
       };
 
       yahooFundCache.set(symbol, { data, expiresAt: Date.now() + YAHOO_FUND_TTL });
+      // Write to Supabase so next cold start skips live fetch
+      writeSupabaseFundamentals(symbol, data, screenerCache.get(symbol)?.data ?? null);
       return data;
     } catch (_e) {
       continue;
@@ -261,6 +310,8 @@ export async function fetchScreenerFundamentals(symbol: string): Promise<Screene
       };
 
       screenerCache.set(symbol, { data, expiresAt: Date.now() + SCREENER_TTL });
+      // Write to Supabase so next cold start skips live scraping
+      writeSupabaseFundamentals(symbol, yahooFundCache.get(symbol)?.data ?? null, data);
       return data;
     } catch (_e) {
       continue;
@@ -400,6 +451,66 @@ export async function enrichStocksBackground(symbols: string[]): Promise<void> {
 export function isYahooCached(symbol: string): boolean {
   const c = yahooFundCache.get(symbol);
   return !!(c && c.expiresAt > Date.now());
+}
+
+/**
+ * Batch-load fundamentals from Supabase for multiple symbols in one query.
+ * Populates in-memory caches so getEnrichedFromCache() returns real data.
+ * Falls back gracefully if Supabase is unavailable.
+ * ~50ms for any number of symbols — replaces per-symbol live fetching on cold start.
+ */
+export async function loadFundamentalsFromSupabase(symbols: string[]): Promise<void> {
+  // Only fetch symbols not already in memory cache
+  const missing = symbols.filter(s => !isYahooCached(s));
+  if (missing.length === 0) return;
+
+  const rows = await readSupabaseFundamentals(missing);
+  if (rows.size === 0) return;
+
+  const now = Date.now();
+  for (const [symbol, row] of rows) {
+    // Populate Yahoo cache
+    if (!yahooFundCache.has(symbol) || (yahooFundCache.get(symbol)!.expiresAt <= now)) {
+      const yahoo: YahooFundamentals = {
+        symbol,
+        pe:            row.pe            ?? null,
+        eps:           null,
+        weekHigh52:    row.week_high_52  ?? null,
+        weekLow52:     row.week_low_52   ?? null,
+        marketCap:     row.market_cap    ?? null,
+        bookValue:     row.book_value    ?? null,
+        priceToBook:   null,
+        dividendYield: row.dividend_yield ?? null,
+        forwardPE:     null,
+        pChange:       row.p_change      ?? null,
+        lastPrice:     row.last_price    ?? null,
+        dataSource:    'YAHOO',
+      };
+      if (yahoo.lastPrice) {
+        yahooFundCache.set(symbol, { data: yahoo, expiresAt: now + YAHOO_FUND_TTL });
+      }
+    }
+    // Populate Screener cache
+    if (!screenerCache.has(symbol) || (screenerCache.get(symbol)!.expiresAt <= now)) {
+      const hasScreener = row.roe != null || row.roce != null || row.promoter_holding != null;
+      if (hasScreener) {
+        const screener: ScreenerFundamentals = {
+          symbol,
+          pe:              row.pe               ?? null,
+          roe:             row.roe              ?? null,
+          roce:            row.roce             ?? null,
+          debtToEquity:    row.debt_to_equity   ?? null,
+          promoterHolding: row.promoter_holding ?? null,
+          salesGrowth3yr:  row.sales_growth_3yr  ?? null,
+          profitGrowth3yr: row.profit_growth_3yr ?? null,
+          dividendYield:   row.dividend_yield   ?? null,
+          currentRatio:    null,
+          dataSource:      'SCREENER',
+        };
+        screenerCache.set(symbol, { data: screener, expiresAt: now + SCREENER_TTL });
+      }
+    }
+  }
 }
 
 /**

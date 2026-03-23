@@ -16,7 +16,7 @@ import { OrbVwapEngine } from "./src/services/upstox/OrbVwapEngine";
 import { PredictionStorageService } from "./src/services/PredictionStorageService";
 import { getSupabaseClient } from "./src/lib/supabase";
 import { fetchNewsIntelligence, getStockSentiment, getTopNews, getSectorSentiment } from "./src/services/NewsIntelligenceService";
-import { enrichStocksBackground, getEnrichedFromCache, fetchFIIDIIData, computeFundamentalScore, fetchYahooFundamentals, fetchScreenerFundamentals, isYahooCached, type EnrichedStockData } from "./src/services/MarketDataAggregator";
+import { enrichStocksBackground, getEnrichedFromCache, fetchFIIDIIData, computeFundamentalScore, fetchYahooFundamentals, fetchScreenerFundamentals, isYahooCached, loadFundamentalsFromSupabase, type EnrichedStockData } from "./src/services/MarketDataAggregator";
 import { runSuperbrain, type SuperbrainInput } from "./src/services/SuperbrainEngine";
 
 import path from "path";
@@ -1652,13 +1652,19 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
       ]);
     }
 
-    // ── Pass 3: Inline Yahoo enrichment for top 10 uncached symbols ──
-    // Only Yahoo (fast ~200ms each) — gives price, 52W hi/lo, PE.
-    // Screener HTML (slow, 215KB) is fetched lazily via /api/enrich endpoint.
-    // Hard cap: 2.5s total so we stay well within Vercel 10s limit.
+    // ── Pass 3: Load fundamentals — Supabase first (~50ms), then Yahoo live for misses ──
+    // Supabase persists data across cold starts — eliminates per-symbol live fetching.
+    // Yahoo live fetch only runs for symbols not in Supabase (first time ever seen).
     const top50Symbols = preSorted.slice(0, 50).map(r => r.symbol);
-    const top10Uncached = top50Symbols.filter(s => !isYahooCached(s)).slice(0, 10);
 
+    // Step 3a: Batch read from Supabase (one query, all symbols, ~50ms)
+    await Promise.race([
+      loadFundamentalsFromSupabase(top50Symbols),
+      new Promise<void>(r => setTimeout(r, 1500)),
+    ]);
+
+    // Step 3b: Yahoo live fetch only for symbols still missing after Supabase read
+    const top10Uncached = top50Symbols.filter(s => !isYahooCached(s)).slice(0, 10);
     if (top10Uncached.length > 0) {
       await Promise.race([
         Promise.allSettled(top10Uncached.map(s => fetchYahooFundamentals(s))),
@@ -4071,8 +4077,12 @@ Respond ONLY with this JSON structure (fill every field):
       ]);
     }
 
-    // ── Pass 3: Inline Yahoo enrichment for top 10 uncached MB symbols ──
+    // ── Pass 3: Load fundamentals — Supabase first, then Yahoo for misses ──
     const mbTop50Symbols = universe.slice(0, 50).map(p => p.symbol);
+    await Promise.race([
+      loadFundamentalsFromSupabase(mbTop50Symbols),
+      new Promise<void>(r => setTimeout(r, 1500)),
+    ]);
     const mbTop10Uncached = mbTop50Symbols.filter(s => !isYahooCached(s)).slice(0, 10);
     if (mbTop10Uncached.length > 0) {
       await Promise.race([
