@@ -549,6 +549,33 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc');
   const [search, setSearch] = useState('');
   const [signalFilter, setSignalFilter] = useState<SignalFilter>('ALL');
+  // Lazy enrichment cache: symbol → enriched fields (ROE/ROCE/PE/Promoter%)
+  const [enrichCache, setEnrichCache] = useState<Record<string, Partial<AnalysisResult>>>({});
+
+  const handleExpand = (symbol: string) => {
+    const next = expanded === symbol ? null : symbol;
+    setExpanded(next);
+    // Fetch enrichment if not already cached and row is being opened
+    if (next && !enrichCache[symbol]) {
+      fetch(`/api/stock/enrich?symbol=${symbol}`)
+        .then(r => r.json())
+        .then(data => {
+          if (!data) return;
+          const patch: Partial<AnalysisResult> = {};
+          if (data.yahoo?.weekHigh52 != null) patch.weekHigh52 = data.yahoo.weekHigh52;
+          if (data.yahoo?.weekLow52  != null) patch.weekLow52  = data.yahoo.weekLow52;
+          if (data.yahoo?.pe         != null) patch.pe         = data.yahoo.pe;
+          if (data.screener?.roe     != null) patch.roe        = data.screener.roe;
+          if (data.screener?.roce    != null) patch.roce       = data.screener.roce;
+          if (data.screener?.debtToEquity    != null) patch.debtToEquity    = data.screener.debtToEquity;
+          if (data.screener?.promoterHolding != null) patch.promoterHolding = data.screener.promoterHolding;
+          if (Object.keys(patch).length > 0) {
+            setEnrichCache(prev => ({ ...prev, [symbol]: { ...(prev[symbol] ?? {}), ...patch } }));
+          }
+        })
+        .catch(() => {});
+    }
+  };
 
   const filtered = [...results]
     .filter(r => {
@@ -640,7 +667,7 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
             {filtered.map((stock, i) => (
               <React.Fragment key={stock.symbol}>
                 <tr
-                  onClick={() => setExpanded(expanded === stock.symbol ? null : stock.symbol)}
+                  onClick={() => handleExpand(stock.symbol)}
                   className={`cursor-pointer transition-colors hover:bg-white/[0.025] ${expanded === stock.symbol ? 'bg-cyan-500/[0.04]' : ''}`}
                 >
                   <td className="px-4 py-3">
@@ -695,6 +722,8 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
                 {expanded === stock.symbol && (
                   <tr className="bg-cyan-500/[0.03] border-b border-cyan-500/10">
                     <td colSpan={11} className="px-4 py-4">
+                      {/* Merge lazy-fetched enrichment data into stock for display */}
+                      {(() => { Object.assign(stock, enrichCache[stock.symbol] ?? {}); return null; })()}
                       <div className="space-y-3">
                         {/* Source badge */}
                         <div className="flex items-center gap-2 flex-wrap">

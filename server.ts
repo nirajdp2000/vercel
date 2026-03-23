@@ -1622,8 +1622,8 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
     });
 
     // ── Pass 2b: Fast live-price pre-fetch for top 100 symbols missing from cache ──
-    // Uses Yahoo v8 range=1d (fast, ~200ms per call). Batched with 3s hard timeout.
-    // This ensures every displayed stock has a real price even on cold start.
+    // Uses Yahoo v8 range=1d (fast, ~200ms per call). Limit to top 20 to save CPU.
+    // This ensures displayed stocks have a real price even on cold start.
     const symbolsMissingPrice = top100Universe
       .map(p => p.symbol)
       .filter(s => {
@@ -1631,18 +1631,17 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
         if (cached && cached.expiresAt > Date.now()) return false;
         const ohlcv = realOHLCVCache.get(s);
         return !(ohlcv && ohlcv.expiresAt > Date.now() && ohlcv.livePrice);
-      });
+      })
+      .slice(0, 20); // cap at 20 — rest get price from OHLCV candle close
 
     if (symbolsMissingPrice.length > 0) {
       const ttl = isMarketDay() ? 5 * 60_000 : 60 * 60_000;
       const now = Date.now();
-      // Fetch in parallel, hard 3s total timeout — never blocks beyond that
       await Promise.race([
         Promise.allSettled(symbolsMissingPrice.map(async sym => {
           const q = await fetchYahooQuote(sym).catch(() => null);
           if (q && q.price > 0) {
             perSymbolPriceCache.set(sym, { price: q.price, changePct: q.changePct, expiresAt: now + ttl });
-            // Also backfill OHLCV cache livePrice if candles exist but livePrice was null
             const ohlcv = realOHLCVCache.get(sym);
             if (ohlcv && ohlcv.expiresAt > Date.now() && !ohlcv.livePrice) {
               realOHLCVCache.set(sym, { ...ohlcv, livePrice: q.price, changePct: q.changePct });
@@ -1653,18 +1652,17 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
       ]);
     }
 
-    // ── Pass 3: Enrich top 10 inline (within Vercel function lifetime) ──
-    // Fire-and-forget doesn't work on Vercel — function terminates after response.
-    // So we fetch Yahoo + Screener for top 10 uncached symbols inline, 3s hard cap.
+    // ── Pass 3: Inline Yahoo enrichment for top 10 uncached symbols ──
+    // Only Yahoo (fast ~200ms each) — gives price, 52W hi/lo, PE.
+    // Screener HTML (slow, 215KB) is fetched lazily via /api/enrich endpoint.
+    // Hard cap: 2.5s total so we stay well within Vercel 10s limit.
     const top50Symbols = preSorted.slice(0, 50).map(r => r.symbol);
     const top10Uncached = top50Symbols.filter(s => !isYahooCached(s)).slice(0, 10);
 
     if (top10Uncached.length > 0) {
       await Promise.race([
-        Promise.allSettled(top10Uncached.map(s =>
-          Promise.allSettled([fetchYahooFundamentals(s), fetchScreenerFundamentals(s)])
-        )),
-        new Promise<void>(r => setTimeout(r, 3000)),
+        Promise.allSettled(top10Uncached.map(s => fetchYahooFundamentals(s))),
+        new Promise<void>(r => setTimeout(r, 2500)),
       ]);
     }
 
@@ -1745,12 +1743,9 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
       architecture: ultraArchitecture
     };
 
-    // Cache the result
-    ultraQuantCache.set(cacheKey, { expiresAt: Date.now() + ULTRA_QUANT_CACHE_TTL, payload: dashboard });
-
-    // Fire-and-forget background cache warm for next request — never blocks response
-    enrichStocksBackground(top50Symbols).catch(() => {});
-    warmOHLCVBackground([...top100Symbols]).catch(() => {});
+    // Cache: 60s if enriched data present, 10s if not (so next request re-enriches)
+    const hasEnrichment = [...enrichedMap.values()].some(e => e.yahoo !== null);
+    ultraQuantCache.set(cacheKey, { expiresAt: Date.now() + (hasEnrichment ? ULTRA_QUANT_CACHE_TTL : 10_000), payload: dashboard });
 
     return dashboard;
   };
@@ -4047,7 +4042,7 @@ Respond ONLY with this JSON structure (fill every field):
       mbRealOHLCVMap.set(p.symbol, getOHLCVFromCache(p.symbol));
     });
 
-    // ── Pass 2b: Fast live-price pre-fetch for top 100 MB symbols missing from cache ──
+    // ── Pass 2b: Fast live-price pre-fetch — cap at 20 to save CPU ──
     const mbSymbolsMissingPrice = universe
       .map(p => p.symbol)
       .filter(s => {
@@ -4055,7 +4050,8 @@ Respond ONLY with this JSON structure (fill every field):
         if (cached && cached.expiresAt > Date.now()) return false;
         const ohlcv = realOHLCVCache.get(s);
         return !(ohlcv && ohlcv.expiresAt > Date.now() && ohlcv.livePrice);
-      });
+      })
+      .slice(0, 20);
 
     if (mbSymbolsMissingPrice.length > 0) {
       const ttl = isMarketDay() ? 5 * 60_000 : 60 * 60_000;
@@ -4075,15 +4071,13 @@ Respond ONLY with this JSON structure (fill every field):
       ]);
     }
 
-    // ── Pass 3: Enrich top 10 inline (within Vercel function lifetime) ──
+    // ── Pass 3: Inline Yahoo enrichment for top 10 uncached MB symbols ──
     const mbTop50Symbols = universe.slice(0, 50).map(p => p.symbol);
     const mbTop10Uncached = mbTop50Symbols.filter(s => !isYahooCached(s)).slice(0, 10);
     if (mbTop10Uncached.length > 0) {
       await Promise.race([
-        Promise.allSettled(mbTop10Uncached.map(s =>
-          Promise.allSettled([fetchYahooFundamentals(s), fetchScreenerFundamentals(s)])
-        )),
-        new Promise<void>(r => setTimeout(r, 3000)),
+        Promise.allSettled(mbTop10Uncached.map(s => fetchYahooFundamentals(s))),
+        new Promise<void>(r => setTimeout(r, 2500)),
       ]);
     }
     const mbEnrichedMap = new Map<string, EnrichedStockData>(
@@ -4271,11 +4265,9 @@ Respond ONLY with this JSON structure (fill every field):
       cachedAt:        new Date().toLocaleTimeString(),
     };
 
-    multibaggerCache.set(cycleDays, { expiresAt: Date.now() + MULTIBAGGER_CACHE_TTL[cycleDays], payload });
-
-    // Fire-and-forget background cache warm for next request — never blocks response
-    enrichStocksBackground(mbTop50Symbols).catch(() => {});
-    warmOHLCVBackground(universe.map(p => p.symbol)).catch(() => {});
+    const mbHasEnrichment = [...mbEnrichedMap.values()].some(e => e.yahoo !== null);
+    const mbCacheTTL = mbHasEnrichment ? MULTIBAGGER_CACHE_TTL[cycleDays] : 10_000;
+    multibaggerCache.set(cycleDays, { expiresAt: Date.now() + mbCacheTTL, payload });
 
     return payload;
   };
@@ -4303,12 +4295,15 @@ Respond ONLY with this JSON structure (fill every field):
 
   // ── Multi-source enrichment endpoints ──────────────────────────────────────
 
-  /** GET /api/stock/enrich?symbol=RELIANCE — Yahoo fundamentals + Screener + news */
+  /** GET /api/stock/enrich?symbol=RELIANCE — Yahoo fundamentals + Screener (inline, awaited) */
   app.get("/api/stock/enrich", async (req, res) => {
     const symbol = String(req.query.symbol ?? '').toUpperCase().trim();
     if (!symbol) return res.status(400).json({ error: 'symbol required' });
-    // Trigger background fetch then return whatever is cached
-    enrichStocksBackground([symbol]).catch(() => {});
+    // Fetch inline with 6s timeout — this endpoint is called lazily by the frontend
+    await Promise.race([
+      Promise.allSettled([fetchYahooFundamentals(symbol), fetchScreenerFundamentals(symbol)]),
+      new Promise<void>(r => setTimeout(r, 6000)),
+    ]);
     const data = getEnrichedFromCache(symbol);
     res.json(data);
   });
