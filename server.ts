@@ -1298,19 +1298,36 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
     const rawUniverse = await createUltraQuantUniverse();
     const totalLoaded = rawUniverse.length;
 
-    // Pre-fetch real OHLCV for all stocks in parallel (batched to avoid rate limiting)
-    const OHLCV_BATCH = 5;
-    const realOHLCVMap = new Map<string, UltraQuantCandle[] | null>();
-    for (let i = 0; i < rawUniverse.length; i += OHLCV_BATCH) {
-      const chunk = rawUniverse.slice(i, i + OHLCV_BATCH);
-      await Promise.all(chunk.map(async p => {
-        const candles = await fetchRealOHLCV(p.symbol).catch(() => null);
-        realOHLCVMap.set(p.symbol, candles);
-      }));
-    }
+    // ── Pass 1: Score entire universe with synthetic data (fast, no network) ──
+    const syntheticUniverse = rawUniverse
+      .map((profile) => analyzeUltraQuantProfile(profile, request, null));
 
-    const analyzedUniverse = rawUniverse
-      .map((profile) => analyzeUltraQuantProfile(profile, request, realOHLCVMap.get(profile.symbol)));
+    // Sort by synthetic score, take top 150 candidates
+    const top150Symbols = new Set(
+      [...syntheticUniverse]
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 150)
+        .map(r => r.symbol)
+    );
+
+    // ── Pass 2: Fetch real OHLCV only for top 150 (parallel, ~15s max) ──
+    const realOHLCVMap = new Map<string, UltraQuantCandle[] | null>();
+    const top150 = rawUniverse.filter(p => top150Symbols.has(p.symbol));
+    const OHLCV_BATCH = 10;
+    await Promise.all(
+      Array.from({ length: Math.ceil(top150.length / OHLCV_BATCH) }, (_, bi) =>
+        Promise.all(
+          top150.slice(bi * OHLCV_BATCH, (bi + 1) * OHLCV_BATCH).map(async p => {
+            realOHLCVMap.set(p.symbol, await fetchRealOHLCV(p.symbol).catch(() => null));
+          })
+        )
+      )
+    );
+
+    // ── Pass 3: Re-score top 150 with real data, keep rest as synthetic ──
+    const analyzedUniverse = rawUniverse.map((profile) =>
+      analyzeUltraQuantProfile(profile, request, realOHLCVMap.get(profile.symbol) ?? null)
+    );
     const totalProcessed = analyzedUniverse.length;
 
     // Soft sector filter only — do NOT hard-filter on numeric thresholds
@@ -3606,19 +3623,33 @@ Respond ONLY with this JSON structure (fill every field):
     const weights  = MB_CYCLE_WEIGHTS[cycleDays];
     const universe = await createUltraQuantUniverse();
 
-    // Pre-fetch real OHLCV for all stocks (batched, uses shared cache with UltraQuant)
-    const MB_OHLCV_BATCH = 5;
-    const mbRealOHLCVMap = new Map<string, UltraQuantCandle[] | null>();
-    for (let i = 0; i < universe.length; i += MB_OHLCV_BATCH) {
-      const chunk = universe.slice(i, i + MB_OHLCV_BATCH);
-      await Promise.all(chunk.map(async p => {
-        const candles = await fetchRealOHLCV(p.symbol).catch(() => null);
-        mbRealOHLCVMap.set(p.symbol, candles);
-      }));
-    }
+    // ── Pass 1: Score full universe with synthetic data to find top candidates ──
+    const syntheticSeries = universe.map((p) => mbBuildSeries(p, cycleDays, null));
+    const synthCycleReturns = syntheticSeries.map(({ closes }) => mbRelStrengthRaw(closes, cycleDays));
+    const top150MBSymbols = new Set(
+      universe
+        .map((p, i) => ({ symbol: p.symbol, ret: synthCycleReturns[i] }))
+        .sort((a, b) => b.ret - a.ret)
+        .slice(0, 150)
+        .map(x => x.symbol)
+    );
 
-    // Step 1: Build price/volume series — real data when available, synthetic fallback
-    const seriesCache = universe.map((p) => mbBuildSeries(p, cycleDays, mbRealOHLCVMap.get(p.symbol)));
+    // ── Pass 2: Fetch real OHLCV only for top 150 (parallel) ──
+    const mbRealOHLCVMap = new Map<string, UltraQuantCandle[] | null>();
+    const mbTop150 = universe.filter(p => top150MBSymbols.has(p.symbol));
+    const MB_OHLCV_BATCH = 10;
+    await Promise.all(
+      Array.from({ length: Math.ceil(mbTop150.length / MB_OHLCV_BATCH) }, (_, bi) =>
+        Promise.all(
+          mbTop150.slice(bi * MB_OHLCV_BATCH, (bi + 1) * MB_OHLCV_BATCH).map(async p => {
+            mbRealOHLCVMap.set(p.symbol, await fetchRealOHLCV(p.symbol).catch(() => null));
+          })
+        )
+      )
+    );
+
+    // Step 1: Build price/volume series — real data for top 150, synthetic for rest
+    const seriesCache = universe.map((p) => mbBuildSeries(p, cycleDays, mbRealOHLCVMap.get(p.symbol) ?? null));
 
     // Step 2: Compute per-stock factor scores
     const trendScores     = seriesCache.map(({ closes })  => mbTrendScore(closes));
