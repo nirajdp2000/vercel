@@ -1,8 +1,9 @@
-feat: EOD batch architecture — zero live Yahoo calls during scans
+perf: drastically reduce CPU usage on both scan tabs
 
-- Scan pipeline reads OHLCV + fundamentals from Supabase only
-- /api/admin/refresh-eod fetches top 150 symbols once per day
-- loadOHLCVFromSupabase / writeOHLCVToSupabase helpers
-- /api/admin/refresh-eod/status endpoint
-- ohlcv_cache table SQL in supabase-migration.sql
-- supabaseTableMissing flag skips dead Supabase calls instantly
+- UltraQuant cache TTL: 60s → 5min
+- Multibagger cache TTLs: 30-180s → 3-10min
+- Remove 10s fallback TTL (was causing recompute every 10s with no Supabase data)
+- Skip Supabase OHLCV read when >80% of symbols already in memory cache
+- Skip Supabase fundamentals read when >80% already warm
+- Memoize createUltraQuantUniverse() — avoid rebuilding large array on every scan
+- Clear memo on universe refresh from Supabase

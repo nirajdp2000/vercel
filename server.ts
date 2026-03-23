@@ -650,8 +650,11 @@ setFallbackUniverse(NSE_STOCK_UNIVERSE.map(s => ({
 
 // ── Module-level result caches (shared across requests on warm instances) ────
 const ultraQuantCache = new Map<string, { expiresAt: number; payload: any }>();
-const ULTRA_QUANT_CACHE_TTL = 60_000;
+const ULTRA_QUANT_CACHE_TTL = 5 * 60_000;   // 5 min — recompute only when stale
 const multibaggerCache = new Map<number, { expiresAt: number; payload: any }>();
+
+// ── Memoised universe — rebuilt only when Supabase universe changes ───────────
+let _cachedUniverse: UltraQuantProfile[] | null = null;
 
 // ── Universe state — single object so startServerlessApp can access it ────────
 const _universeState = {
@@ -700,6 +703,7 @@ const loadSupabaseUniverse = async (timeoutMs = 6000): Promise<void> => {
         // Invalidate scan caches so next request uses full universe
         ultraQuantCache.clear();
         multibaggerCache.clear();
+        _cachedUniverse = null;
         console.log(`[Universe] Loaded ${_universeState.universe.length} stocks from Supabase`);
       }
     });
@@ -710,6 +714,9 @@ const loadSupabaseUniverse = async (timeoutMs = 6000): Promise<void> => {
 };
 
 const createUltraQuantUniverse = (): UltraQuantProfile[] => {
+  // Fast path: return memoised result if universe hasn't changed
+  if (_cachedUniverse) return _cachedUniverse;
+
   // Check if startServerlessApp pre-loaded Supabase universe into global
   const globalUniverse = (global as any).__supabaseUniverse as Array<{ symbol: string; sector: string; industry: string; marketCap: number; averageVolume: number }> | undefined;
   if (globalUniverse && globalUniverse.length > 0 && !_universeState.globalApplied) {
@@ -727,10 +734,12 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
     _universeState.globalApplied = true;
     ultraQuantCache.clear();
     multibaggerCache.clear();
+    _cachedUniverse = null; // force rebuild on next call after universe change
     console.log(`[Universe] Applied ${_universeState.universe.length} stocks from global pre-load`);
   }
   if (!_universeState.universe) getUniverseSync();
-  return _universeState.universe!;
+  _cachedUniverse = _universeState.universe!;
+  return _cachedUniverse;
 };
 
 
@@ -1626,12 +1635,13 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
       realOHLCVMap.set(p.symbol, getOHLCVFromCache(p.symbol));
     });
 
-    // ── Pass 2b: Load OHLCV from Supabase (zero live HTTP — written by /api/admin/refresh-eod) ──
+    // ── Pass 2b: Load OHLCV from Supabase only if most symbols are missing ──
+    // Skip entirely when in-memory cache is already warm (saves ~50ms Supabase RTT)
     const symbolsMissingOHLCV = top100Universe
       .map(p => p.symbol)
       .filter(s => !(realOHLCVCache.get(s)?.expiresAt ?? 0 > Date.now()));
 
-    if (symbolsMissingOHLCV.length > 0) {
+    if (symbolsMissingOHLCV.length > top100Universe.length * 0.2) {
       await Promise.race([
         loadOHLCVFromSupabase(symbolsMissingOHLCV, setOHLCVCache),
         new Promise<void>(r => setTimeout(r, 1500)),
@@ -1642,12 +1652,15 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
       });
     }
 
-    // ── Pass 3: Load fundamentals from Supabase only (no live Yahoo calls) ──
+    // ── Pass 3: Load fundamentals from Supabase only if not already warm ──
     const top50Symbols = preSorted.slice(0, 50).map(r => r.symbol);
-    await Promise.race([
-      loadFundamentalsFromSupabase(top50Symbols),
-      new Promise<void>(r => setTimeout(r, 1500)),
-    ]);
+    const fundMissing = top50Symbols.filter(s => !isYahooCached(s));
+    if (fundMissing.length > top50Symbols.length * 0.2) {
+      await Promise.race([
+        loadFundamentalsFromSupabase(fundMissing),
+        new Promise<void>(r => setTimeout(r, 1500)),
+      ]);
+    }
 
     const enrichedMap = new Map<string, EnrichedStockData>(
       top50Symbols.map(s => [s, getEnrichedFromCache(s)])
@@ -1726,9 +1739,8 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
       architecture: ultraArchitecture
     };
 
-    // Cache: 60s if enriched data present, 10s if not (so next request re-enriches)
-    const hasEnrichment = [...enrichedMap.values()].some(e => e.yahoo !== null);
-    ultraQuantCache.set(cacheKey, { expiresAt: Date.now() + (hasEnrichment ? ULTRA_QUANT_CACHE_TTL : 10_000), payload: dashboard });
+    // Cache: 5min always — avoid thrashing when Supabase has no data yet
+    ultraQuantCache.set(cacheKey, { expiresAt: Date.now() + ULTRA_QUANT_CACHE_TTL, payload: dashboard });
 
     return dashboard;
   };
@@ -3984,7 +3996,7 @@ Respond ONLY with this JSON structure (fill every field):
    */
 
   const MULTIBAGGER_CACHE_TTL: Record<MultibaggerCycle, number> = {
-    30: 30_000, 60: 45_000, 90: 60_000, 120: 90_000, 180: 120_000, 300: 180_000,
+    30: 3 * 60_000, 60: 4 * 60_000, 90: 5 * 60_000, 120: 7 * 60_000, 180: 8 * 60_000, 300: 10 * 60_000,
   };
 
   /**
@@ -4025,12 +4037,12 @@ Respond ONLY with this JSON structure (fill every field):
       mbRealOHLCVMap.set(p.symbol, getOHLCVFromCache(p.symbol));
     });
 
-    // ── Pass 2b: Load OHLCV from Supabase (zero live HTTP) ──
+    // ── Pass 2b: Load OHLCV from Supabase only if most symbols are missing ──
     const mbSymbolsMissingOHLCV = universe
       .map(p => p.symbol)
       .filter(s => !(realOHLCVCache.get(s)?.expiresAt ?? 0 > Date.now()));
 
-    if (mbSymbolsMissingOHLCV.length > 0) {
+    if (mbSymbolsMissingOHLCV.length > universe.length * 0.2) {
       await Promise.race([
         loadOHLCVFromSupabase(mbSymbolsMissingOHLCV, setOHLCVCache),
         new Promise<void>(r => setTimeout(r, 1500)),
@@ -4040,12 +4052,15 @@ Respond ONLY with this JSON structure (fill every field):
       });
     }
 
-    // ── Pass 3: Load fundamentals from Supabase only ──
+    // ── Pass 3: Load fundamentals from Supabase only if not already warm ──
     const mbTop50Symbols = universe.slice(0, 50).map(p => p.symbol);
-    await Promise.race([
-      loadFundamentalsFromSupabase(mbTop50Symbols),
-      new Promise<void>(r => setTimeout(r, 1500)),
-    ]);
+    const mbFundMissing = mbTop50Symbols.filter(s => !isYahooCached(s));
+    if (mbFundMissing.length > mbTop50Symbols.length * 0.2) {
+      await Promise.race([
+        loadFundamentalsFromSupabase(mbFundMissing),
+        new Promise<void>(r => setTimeout(r, 1500)),
+      ]);
+    }
     const mbEnrichedMap = new Map<string, EnrichedStockData>(
       mbTop50Symbols.map(s => [s, getEnrichedFromCache(s)])
     );
@@ -4231,9 +4246,8 @@ Respond ONLY with this JSON structure (fill every field):
       cachedAt:        new Date().toLocaleTimeString(),
     };
 
-    const mbHasEnrichment = [...mbEnrichedMap.values()].some(e => e.yahoo !== null);
-    const mbCacheTTL = mbHasEnrichment ? MULTIBAGGER_CACHE_TTL[cycleDays] : 10_000;
-    multibaggerCache.set(cycleDays, { expiresAt: Date.now() + mbCacheTTL, payload });
+    // Cache: always use full TTL — avoid thrashing when Supabase has no data yet
+    multibaggerCache.set(cycleDays, { expiresAt: Date.now() + MULTIBAGGER_CACHE_TTL[cycleDays], payload });
 
     return payload;
   };

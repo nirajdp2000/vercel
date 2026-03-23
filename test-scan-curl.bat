@@ -1,0 +1,2 @@
+@echo off
+curl -s --max-time 20 -X POST https://nirajstock.vercel.app/api/ultra-quant/scan -H "Content-Type: application/json" -d "{}" 2>&1 | node -e "const d=require('fs').readFileSync('/dev/stdin','utf8'); try{const j=JSON.parse(d); console.log('Scan OK, results:', j.length, 'first:', j[0]?.symbol, 'price:', j[0]?.currentPrice, 'source:', j[0]?.dataSource);}catch(e){console.log('Raw:', d.substring(0,500));}"
