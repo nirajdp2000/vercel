@@ -1,33 +1,26 @@
-fix: eliminate all fake prices — null for SIM stocks, real-only for LIVE
+fix: extract live price from OHLCV meta for accurate real-time prices
 
-INVESTIGATION RESULTS (tested all sources):
-  - Yahoo v8 chart (.NS/.BO): ✅ ONLY reliable free source, within 0.3% of NSE
-  - NSE India API: ❌ 403 from Vercel IPs
-  - Moneycontrol: ❌ inconsistent (works for TCS, fails for others)
-  - BSE India API: ❌ returns HTML
-  - Stooq: ❌ N/D for Indian stocks
-  - Twelve Data: ❌ needs paid key
-  - Upstox: ❌ needs auth token
-  - BLOOM is BSE-only (BLOOM.BO = ₹11.46) — Yahoo .NS returns 404
+Root cause: analyzeUltraQuantProfile was using enrichedData.yahoo.lastPrice
+(from MarketDataAggregator enrichment cache) as the only real price source.
+But enrichment is fire-and-forget and may not complete before first scan.
 
-FIXES:
-1. currentPrice: null for synthetic stocks (no fake random-walk prices)
-   - UltraQuant: null when no Yahoo enrichment AND no real OHLCV candles
-   - Multibagger: null when no Yahoo enrichment AND no real OHLCV candles
-   - UI already shows '—' for null currentPrice
+Fix: fetchRealOHLCV already calls Yahoo v8 chart API and gets meta.regularMarketPrice
+in the same HTTP response as candles. Now we extract and store livePrice + changePct
+from that meta field directly into realOHLCVCache.
 
-2. lstmPredictedPrice: null for synthetic stocks
-   - Type updated to number | null in AnalysisResult
-   - Display shows '—' instead of fake ₹14880-style numbers
-   - LSTM Target card only shows green dot when dataSource=real
-
-3. Superbrain: passes null price for synthetic stocks
-   - computePriceTargets returns null targets when price=null
-   - No more fake ₹14,249 targets for BLOOM/SIM stocks
-
-4. startServerlessApp: pre-warms enrichment for top 50 symbols at startup
-   - First scan request now gets real prices from warm cache
-   - Previously: cold start → all enrichment null → all prices synthetic
-
-5. MarketDataAggregator: added YAHOO_OVERRIDES for BSE-only stocks
-   - TATAMOTORS, M&M, BAJAJ-AUTO now resolve correctly via .BO
+Changes:
+- realOHLCVCache now stores { candles, livePrice, changePct } — extracted from
+  Yahoo v8 meta.regularMarketPrice in the same call that fetches candles
+- perSymbolPriceCache populated from OHLCV fetch (avoids duplicate Yahoo calls)
+- getLivePriceFromCache() helper returns livePrice + changePct from OHLCV cache
+- analyzeUltraQuantProfile: new ohlcvLivePrice + ohlcvChangePct params
+  Price priority: Yahoo enrichment > OHLCV meta livePrice > OHLCV last candle > null
+- lstmPredictedPrice: scaled to realBase (live price) when it differs from endPrice
+  (EOD close) by >0.5% — ensures LSTM target is relative to current live price
+- Superbrain: receives best available real price (enrichment > ohlcvLivePrice > EOD)
+- buildMultibaggerScan: same livePrice priority fix for currentPrice + pChange
+- fetchYahooFundamentals: range=1y → range=5d (faster, smaller payload)
+  52W high/low now from meta.fiftyTwoWeekHigh/Low (reliable in v8 meta)
+- perSymbolPriceCache moved before fetchRealOHLCV to fix declaration order
+- Added /api/debug/enrichment endpoint: shows cache state for any symbols
+  (enrichment hit, OHLCV hit, livePrice, changePct, expiresIn)

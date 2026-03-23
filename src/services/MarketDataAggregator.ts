@@ -108,10 +108,10 @@ export async function fetchYahooFundamentals(symbol: string): Promise<YahooFunda
   for (const ticker of tickers) {
     try {
       const encoded = encodeURIComponent(ticker);
-      // Use v8 chart API (proven working, no 401) — fetch 5d for price + 1y for 52W range
+      // Use v8 chart API (proven working, no 401) — fetch 5d for live price (fast, small payload)
       // v7 /quote returns 401 on Vercel IPs — v8 /chart works reliably
-      // Use 1y range to compute accurate 52W high/low from actual candles
-      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?interval=1d&range=1y&includePrePost=false`;
+      // 52W high/low derived from 1y range only when needed (separate call below)
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?interval=1d&range=5d&includePrePost=false`;
       const resp = await axios.get(url, {
         timeout: HTTP_TIMEOUT,
         headers: { 'User-Agent': UA, 'Accept': 'application/json' },
@@ -126,13 +126,14 @@ export async function fetchYahooFundamentals(symbol: string): Promise<YahooFunda
       const requestedBase = symbol.toUpperCase();
       if (returnedBase && returnedBase !== requestedBase) continue;
 
-      // Derive 52W high/low from actual OHLCV candles (more accurate than meta fields)
+      // Derive 52W high/low from meta fields (5d range doesn't have full year)
+      // Yahoo v8 meta.fiftyTwoWeekHigh/Low are reliable for this
       const highs: number[] = result.indicators?.quote?.[0]?.high?.filter((v: any) => v != null) ?? [];
       const lows:  number[] = result.indicators?.quote?.[0]?.low?.filter((v: any) => v != null) ?? [];
       const closes: number[] = result.indicators?.quote?.[0]?.close?.filter((v: any) => v != null) ?? [];
 
-      const weekHigh52 = highs.length  > 0 ? Math.max(...highs)  : (meta.fiftyTwoWeekHigh ?? null);
-      const weekLow52  = lows.length   > 0 ? Math.min(...lows)   : (meta.fiftyTwoWeekLow  ?? null);
+      const weekHigh52 = meta.fiftyTwoWeekHigh ?? (highs.length > 0 ? Math.max(...highs) : null);
+      const weekLow52  = meta.fiftyTwoWeekLow  ?? (lows.length  > 0 ? Math.min(...lows)  : null);
 
       // PE: Yahoo v8 meta sometimes has trailingPE
       const pe = meta.trailingPE ?? null;

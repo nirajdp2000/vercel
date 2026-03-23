@@ -903,8 +903,11 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
     return { bids, asks };
   };
 
-  // ── Real OHLCV cache: symbol → candles (TTL: 60 min) ─────────────────────
-  const realOHLCVCache = new Map<string, { candles: UltraQuantCandle[]; expiresAt: number }>();
+  // ── Real OHLCV cache: symbol → candles + live price (TTL: 60 min) ────────
+  const realOHLCVCache = new Map<string, { candles: UltraQuantCandle[]; livePrice: number | null; changePct: number | null; expiresAt: number }>();
+
+  // Per-symbol live price cache — populated by fetchRealOHLCV and fetchYahooQuote
+  const perSymbolPriceCache = new Map<string, { price: number; changePct: number; expiresAt: number }>();
 
   // Known Yahoo Finance symbol overrides (NSE symbol → Yahoo ticker)
   // Used when the default SYMBOL.NS returns 404
@@ -962,7 +965,21 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
         }
         if (candles.length < 60) continue;
 
-        realOHLCVCache.set(symbol, { candles, expiresAt: Date.now() + 60 * 60_000 });
+        // Extract live price from meta — same call, no extra network request
+        const meta = result.meta;
+        const livePrice: number | null = (meta?.regularMarketPrice > 0) ? Number(meta.regularMarketPrice.toFixed(2)) : null;
+        const prevClose = meta?.chartPreviousClose ?? meta?.previousClose ?? null;
+        const changePct: number | null = (livePrice && prevClose && prevClose > 0)
+          ? Number(((livePrice - prevClose) / prevClose * 100).toFixed(2))
+          : (meta?.regularMarketChangePercent != null ? Number(meta.regularMarketChangePercent.toFixed(2)) : null);
+
+        realOHLCVCache.set(symbol, { candles, livePrice, changePct, expiresAt: Date.now() + 60 * 60_000 });
+
+        // Also populate perSymbolPriceCache so fetchRealPricesForSymbols doesn't re-fetch
+        if (livePrice) {
+          perSymbolPriceCache.set(symbol, { price: livePrice, changePct: changePct ?? 0, expiresAt: Date.now() + 5 * 60_000 });
+        }
+
         return candles;
       } catch (_e) {
         continue; // try next ticker
@@ -1006,7 +1023,17 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
     return (c && c.expiresAt > Date.now()) ? c.candles : null;
   };
 
-  const analyzeUltraQuantProfile = (profile: UltraQuantProfile, request: ReturnType<typeof normalizeUltraQuantRequest>, realCandles?: UltraQuantCandle[] | null, enrichedData?: EnrichedStockData | null) => {
+  /**
+   * Get live price from OHLCV cache — extracted from Yahoo v8 meta during candle fetch.
+   * This is the most reliable real-time price source (same call as candles, no extra network).
+   */
+  const getLivePriceFromCache = (symbol: string): { livePrice: number | null; changePct: number | null } => {
+    const c = realOHLCVCache.get(symbol);
+    if (!c || c.expiresAt <= Date.now()) return { livePrice: null, changePct: null };
+    return { livePrice: c.livePrice, changePct: c.changePct };
+  };
+
+  const analyzeUltraQuantProfile = (profile: UltraQuantProfile, request: ReturnType<typeof normalizeUltraQuantRequest>, realCandles?: UltraQuantCandle[] | null, enrichedData?: EnrichedStockData | null, ohlcvLivePrice?: number | null, ohlcvChangePct?: number | null) => {
     const random = seededGenerator(symbolSeed(profile.symbol));
     const totalDays = Math.max(260, request.historicalPeriodYears * 252);
     const sectorDrift = {
@@ -1209,13 +1236,18 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
       sector: profile.sector,
       industry: profile.industry,
       marketCap: profile.marketCap,
-      // Real price: Yahoo v8 lastPrice (from enrichment cache) OR OHLCV last close (real candles only)
-      // NEVER show synthetic random-walk price as currentPrice — null means "no real price available"
+      // Real price priority:
+      //  1. Yahoo enrichment lastPrice (from MarketDataAggregator — 1hr cache)
+      //  2. OHLCV meta regularMarketPrice (from fetchRealOHLCV — same Yahoo v8 call)
+      //  3. OHLCV last candle close (EOD price — real but may be yesterday's close)
+      //  4. null — synthetic stock, no real price
       currentPrice: enrichedData?.yahoo?.lastPrice
         ? Number(enrichedData.yahoo.lastPrice.toFixed(2))
-        : (realCandles && realCandles.length >= 60)
-          ? Number(endPrice.toFixed(2))
-          : null,  // synthetic — no real price
+        : ohlcvLivePrice
+          ? ohlcvLivePrice
+          : (realCandles && realCandles.length >= 60)
+            ? Number(endPrice.toFixed(2))
+            : null,  // synthetic — no real price
       dataSource: enrichedData?.yahoo ? 'real' : (realCandles && realCandles.length >= 60) ? 'real' : 'synthetic',
       // Enriched fields from Yahoo + Screener.in
       pe: enrichedData?.yahoo?.pe ?? enrichedData?.screener?.pe ?? null,
@@ -1227,7 +1259,7 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
       weekHigh52: enrichedData?.yahoo?.weekHigh52 ?? null,
       weekLow52: enrichedData?.yahoo?.weekLow52 ?? null,
       deliveryPct: null,
-      pChange: enrichedData?.yahoo?.pChange ?? null,
+      pChange: enrichedData?.yahoo?.pChange ?? ohlcvChangePct ?? null,
       fundamentalScore: enrichedData ? computeFundamentalScore(enrichedData) : null,
       dataQuality: enrichedData?.dataQuality ?? (realCandles && realCandles.length >= 60 ? 'MEDIUM' : 'LOW'),
       newsHeadlines: enrichedData?.newsHeadlines ?? [],
@@ -1247,9 +1279,23 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
       positionSize,
       gradientBoostProb: gradientBoost * 100,
       // LSTM target: only show when we have a real price base
-      lstmPredictedPrice: (enrichedData?.yahoo?.lastPrice || (realCandles && realCandles.length >= 60))
-        ? Number(lstmPredictedPrice.toFixed(2))
-        : null,
+      // Scale the technical projection to the live price if available
+      lstmPredictedPrice: (() => {
+        const hasRealBase = enrichedData?.yahoo?.lastPrice || ohlcvLivePrice || (realCandles && realCandles.length >= 60);
+        if (!hasRealBase) return null;
+        // If we have a live price that differs from endPrice (last candle close),
+        // scale the LSTM projection proportionally so the target is relative to live price
+        const realBase = enrichedData?.yahoo?.lastPrice ?? ohlcvLivePrice ?? null;
+        if (realBase && realBase > 0 && endPrice > 0 && Math.abs(realBase - endPrice) / endPrice > 0.005) {
+          // Scale: lstmPredictedPrice was computed relative to endPrice (EOD close)
+          // Adjust it to be relative to realBase (live price)
+          const ratio = realBase / endPrice;
+          const scaledTarget = lstmPredictedPrice * ratio;
+          // Re-apply ±25% cap relative to realBase
+          return Number(Math.min(realBase * 1.25, Math.max(realBase * 0.75, scaledTarget)).toFixed(2));
+        }
+        return Number(lstmPredictedPrice.toFixed(2));
+      })(),
       marketRegime,
       marketState,
       rlAction,
@@ -1290,7 +1336,7 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
         dataQuality: (enrichedData?.dataQuality ?? (realCandles && realCandles.length >= 60 ? 'MEDIUM' : 'LOW')) as 'HIGH' | 'MEDIUM' | 'LOW',
         dataSource: (enrichedData?.yahoo ? 'real' : (realCandles && realCandles.length >= 60) ? 'real' : 'synthetic') as 'real' | 'synthetic',
       // Pass real price only — null for synthetic so Superbrain suppresses targets
-      }, enrichedData?.yahoo?.lastPrice ?? ((realCandles && realCandles.length >= 60) ? endPrice : null)),
+      }, enrichedData?.yahoo?.lastPrice ?? ohlcvLivePrice ?? ((realCandles && realCandles.length >= 60) ? endPrice : null)),
     };
   };
 
@@ -1462,9 +1508,6 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
     return null;
   };
 
-  // Per-symbol TTL cache — keyed by NSE symbol, expires per entry
-  const perSymbolPriceCache = new Map<string, { price: number; changePct: number; expiresAt: number }>();
-
   const fetchRealPricesForSymbols = async (symbols: string[]): Promise<Map<string, { price: number; changePct: number }>> => {
     const now = Date.now();
     const ttl = isMarketDay() ? 5 * 60_000 : 60 * 60_000;
@@ -1544,7 +1587,9 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
         profile,
         request,
         realOHLCVMap.get(profile.symbol) ?? null,
-        enrichedMap.get(profile.symbol) ?? null
+        enrichedMap.get(profile.symbol) ?? null,
+        getLivePriceFromCache(profile.symbol).livePrice,
+        getLivePriceFromCache(profile.symbol).changePct,
       )
     );
     const totalProcessed = analyzedUniverse.length;
@@ -1926,6 +1971,48 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
       source: universe.length > 440 ? 'supabase' : 'fallback',
       sample: universe.slice(0, 3).map(s => ({ symbol: s.symbol, name: s.name })),
     });
+  });
+
+  // Debug endpoint — enrichment + OHLCV cache state for top symbols
+  app.get("/api/debug/enrichment", (req, res) => {
+    const symbols = (req.query.symbols as string)?.split(',').filter(Boolean)
+      || ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK', 'SBIN', 'BHARTIARTL', 'LT', 'ITC', 'KOTAKBANK'];
+
+    const report = symbols.map(sym => {
+      const enriched = getEnrichedFromCache(sym);
+      const ohlcv = realOHLCVCache.get(sym);
+      const ohlcvValid = ohlcv && ohlcv.expiresAt > Date.now();
+      return {
+        symbol: sym,
+        enrichment: {
+          cached: !!enriched,
+          yahooLastPrice: enriched?.yahoo?.lastPrice ?? null,
+          yahooPChange: enriched?.yahoo?.pChange ?? null,
+          dataQuality: enriched?.dataQuality ?? null,
+          enrichedAt: enriched?.enrichedAt ?? null,
+        },
+        ohlcv: {
+          cached: !!ohlcvValid,
+          candleCount: ohlcvValid ? ohlcv!.candles.length : 0,
+          livePrice: ohlcvValid ? ohlcv!.livePrice : null,
+          changePct: ohlcvValid ? ohlcv!.changePct : null,
+          expiresIn: ohlcvValid ? Math.round((ohlcv!.expiresAt - Date.now()) / 60000) + 'min' : null,
+        },
+        priceCache: (() => {
+          const p = perSymbolPriceCache.get(sym);
+          return p && p.expiresAt > Date.now() ? { price: p.price, changePct: p.changePct } : null;
+        })(),
+      };
+    });
+
+    const summary = {
+      totalChecked: symbols.length,
+      enrichmentHit: report.filter(r => r.enrichment.cached).length,
+      ohlcvHit: report.filter(r => r.ohlcv.cached).length,
+      withLivePrice: report.filter(r => r.ohlcv.livePrice || r.enrichment.yahooLastPrice).length,
+    };
+
+    res.json({ summary, symbols: report });
   });
 
   // Convert our interval string to Upstox v3 {unit}/{interval} path segments
@@ -3926,19 +4013,22 @@ Respond ONLY with this JSON structure (fill every field):
 
       const enriched = mbEnrichedMap.get(profile.symbol) ?? null;
       const hasRealOHLCV = !!(mbRealOHLCVMap.get(profile.symbol) ?? null);
+      const { livePrice: mbLivePrice, changePct: mbChangePct } = getLivePriceFromCache(profile.symbol);
 
       return {
         symbol:           profile.symbol,
         companyName:      MB_COMPANY_NAMES[profile.symbol] ?? `${profile.symbol} Ltd`,
         sector:           profile.sector,
         dataSource:       enriched?.yahoo ? 'real' : hasRealOHLCV ? 'real' : 'synthetic',
-        // Real price only — null for synthetic stocks (no fake random-walk prices shown)
+        // Real price priority: Yahoo enrichment → OHLCV meta livePrice → OHLCV last candle → null
         currentPrice:     enriched?.yahoo?.lastPrice
           ? Number(enriched.yahoo.lastPrice.toFixed(2))
-          : hasRealOHLCV
-            ? Number(seriesCache[i].closes[seriesCache[i].closes.length - 1].toFixed(2))
-            : null,
-        pChange:          enriched?.yahoo?.pChange ?? null,
+          : mbLivePrice
+            ? mbLivePrice
+            : hasRealOHLCV
+              ? Number(seriesCache[i].closes[seriesCache[i].closes.length - 1].toFixed(2))
+              : null,
+        pChange:          enriched?.yahoo?.pChange ?? mbChangePct ?? null,
         weekHigh52:       enriched?.yahoo?.weekHigh52 ?? null,
         weekLow52:        enriched?.yahoo?.weekLow52 ?? null,
         deliveryPct:      null,
@@ -4004,7 +4094,7 @@ Respond ONLY with this JSON structure (fill every field):
           ret180: momentumResults[i].ret180 * 100,
           dataQuality: (enriched?.dataQuality ?? (hasRealOHLCV ? 'MEDIUM' : 'LOW')) as 'HIGH' | 'MEDIUM' | 'LOW',
           dataSource: (enriched?.yahoo ? 'real' : hasRealOHLCV ? 'real' : 'synthetic') as 'real' | 'synthetic',
-        }, enriched?.yahoo?.lastPrice ?? (hasRealOHLCV ? seriesCache[i].closes[seriesCache[i].closes.length - 1] : null)),
+        }, enriched?.yahoo?.lastPrice ?? mbLivePrice ?? (hasRealOHLCV ? seriesCache[i].closes[seriesCache[i].closes.length - 1] : null)),
       };
     });
 
