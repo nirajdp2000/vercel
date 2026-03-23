@@ -1610,6 +1610,17 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
     const rawUniverse = createUltraQuantUniverse();
     const totalLoaded = rawUniverse.length;
 
+    // ── Pass 0: Pre-load ALL OHLCV from Supabase on cold start (one query, ~50ms) ──
+    // Must happen before Pass 1 so the real-data bonus in pre-sort works correctly.
+    const allSymbols = rawUniverse.map(p => p.symbol);
+    const coldSymbols = allSymbols.filter(s => !(realOHLCVCache.get(s)?.expiresAt ?? 0 > Date.now()));
+    if (coldSymbols.length > allSymbols.length * 0.5) {
+      await Promise.race([
+        loadOHLCVFromSupabase(coldSymbols, setOHLCVCache),
+        new Promise<void>(r => setTimeout(r, 2000)),
+      ]);
+    }
+
     // ── Pass 1: Ultra-fast pre-score entire universe using deterministic hash ──
     // No candle simulation — O(1) per stock. Handles 5000+ stocks in <50ms.
     const preSorted = rawUniverse.map(profile => {
@@ -1631,28 +1642,11 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
     const top100Symbols = new Set(preSorted.slice(0, 100).map(r => r.symbol));
     const top100Universe = rawUniverse.filter(p => top100Symbols.has(p.symbol));
 
-    // ── Pass 2: Read real OHLCV from cache only (zero network — warmed in background) ──
+    // ── Pass 2: Read real OHLCV from cache (populated by Pass 0) ──
     const realOHLCVMap = new Map<string, UltraQuantCandle[] | null>();
     top100Universe.forEach(p => {
       realOHLCVMap.set(p.symbol, getOHLCVFromCache(p.symbol));
     });
-
-    // ── Pass 2b: Load OHLCV from Supabase only if most symbols are missing ──
-    // Skip entirely when in-memory cache is already warm (saves ~50ms Supabase RTT)
-    const symbolsMissingOHLCV = top100Universe
-      .map(p => p.symbol)
-      .filter(s => !(realOHLCVCache.get(s)?.expiresAt ?? 0 > Date.now()));
-
-    if (symbolsMissingOHLCV.length > top100Universe.length * 0.2) {
-      await Promise.race([
-        loadOHLCVFromSupabase(symbolsMissingOHLCV, setOHLCVCache),
-        new Promise<void>(r => setTimeout(r, 1500)),
-      ]);
-      // Refresh map with newly loaded data
-      top100Universe.forEach(p => {
-        if (!realOHLCVMap.get(p.symbol)) realOHLCVMap.set(p.symbol, getOHLCVFromCache(p.symbol));
-      });
-    }
 
     // ── Pass 3: Load fundamentals from Supabase only if not already warm ──
     const top50Symbols = preSorted.slice(0, 50).map(r => r.symbol);
@@ -4020,6 +4014,16 @@ Respond ONLY with this JSON structure (fill every field):
     const weights  = MB_CYCLE_WEIGHTS[cycleDays];
     const fullUniverse = createUltraQuantUniverse();
 
+    // ── Pass 0: Pre-load ALL OHLCV from Supabase on cold start (one query, ~50ms) ──
+    const mbAllSymbols = fullUniverse.map(p => p.symbol);
+    const mbColdSymbols = mbAllSymbols.filter(s => !(realOHLCVCache.get(s)?.expiresAt ?? 0 > Date.now()));
+    if (mbColdSymbols.length > mbAllSymbols.length * 0.5) {
+      await Promise.race([
+        loadOHLCVFromSupabase(mbColdSymbols, setOHLCVCache),
+        new Promise<void>(r => setTimeout(r, 2000)),
+      ]);
+    }
+
     // ── Pass 1: Ultra-fast pre-sort using deterministic hash — handles 5000+ stocks ──
     const preScored = fullUniverse.map(p => {
       const seed = symbolSeed(p.symbol);
@@ -4035,26 +4039,11 @@ Respond ONLY with this JSON structure (fill every field):
     const top100MBSet = new Set(preScored.slice(0, 100).map(x => x.symbol));
     const universe = fullUniverse.filter(p => top100MBSet.has(p.symbol));
 
-    // ── Pass 2: Read real OHLCV from cache only (zero network — warmed in background) ──
+    // ── Pass 2: Read real OHLCV from cache (populated by Pass 0) ──
     const mbRealOHLCVMap = new Map<string, UltraQuantCandle[] | null>();
     universe.forEach(p => {
       mbRealOHLCVMap.set(p.symbol, getOHLCVFromCache(p.symbol));
     });
-
-    // ── Pass 2b: Load OHLCV from Supabase only if most symbols are missing ──
-    const mbSymbolsMissingOHLCV = universe
-      .map(p => p.symbol)
-      .filter(s => !(realOHLCVCache.get(s)?.expiresAt ?? 0 > Date.now()));
-
-    if (mbSymbolsMissingOHLCV.length > universe.length * 0.2) {
-      await Promise.race([
-        loadOHLCVFromSupabase(mbSymbolsMissingOHLCV, setOHLCVCache),
-        new Promise<void>(r => setTimeout(r, 1500)),
-      ]);
-      universe.forEach(p => {
-        if (!mbRealOHLCVMap.get(p.symbol)) mbRealOHLCVMap.set(p.symbol, getOHLCVFromCache(p.symbol));
-      });
-    }
 
     // ── Pass 3: Load fundamentals from Supabase only if not already warm ──
     const mbTop50Symbols = universe.slice(0, 50).map(p => p.symbol);

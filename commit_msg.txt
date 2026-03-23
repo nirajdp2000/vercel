@@ -1,6 +1,6 @@
-perf: prioritize real-data symbols in scan pre-sort
+perf: load all OHLCV from Supabase before pre-sort (Pass 0)
 
-- Pass 1 pre-sort now gives +30 bonus to symbols with real OHLCV in cache
-- Ensures cached large-caps (RELIANCE, TCS, etc.) always rank in top 100
-- Prevents random small-caps from displacing real-data stocks
-- Applied to both UltraQuant and Multibagger scan pipelines
+- Pass 0 runs one Supabase query for all symbols before pre-sort
+- Ensures real-data bonus in Pass 1 works correctly on cold start
+- Removes redundant Pass 2b (already covered by Pass 0)
+- Both UltraQuant and Multibagger now show real prices on first request
