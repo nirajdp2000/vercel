@@ -175,48 +175,48 @@ export async function fetchYahooFundamentals(symbol: string): Promise<YahooFunda
 }
 
 // ─── 2. Screener.in HTML scraping ────────────────────────────────────────────
-// Screener /api/company/ returns 404 for all stocks — use HTML scraping instead.
-// The HTML page has id="top-ratios" with all key fundamentals.
+// Screener /api/company/ returns 404 — scrape HTML instead.
+// Confirmed working structure (tested 2026-03):
+//   <li class="flex flex-space-between">
+//     <span class="name">Stock P/E</span>
+//     <span class="nowrap value"><span class="number">47.9</span></span>
+//   </li>
 
 export async function fetchScreenerFundamentals(symbol: string): Promise<ScreenerFundamentals | null> {
   const cached = screenerCache.get(symbol);
   if (cached && cached.expiresAt > Date.now()) return cached.data;
 
-  // Try URL variants: plain symbol, hyphenated (TATA-MOTORS), no-hyphen (BAJAJAUTO)
-  const symbolVariants = [
+  // URL variants: BAJAJ-AUTO stays as-is, M&M → MM (no ampersand)
+  const variants = [
     symbol.toUpperCase(),
-    symbol.toUpperCase().replace(/-/g, '-').replace(/&/g, ''),  // M&M → MM
-    symbol.toUpperCase().replace(/-/g, ''),                      // BAJAJ-AUTO → BAJAJAUTO
+    symbol.toUpperCase().replace(/&/g, ''),   // M&M → MM
+    symbol.toUpperCase().replace(/-/g, ''),   // BAJAJ-AUTO → BAJAJAUTO
   ].filter((v, i, arr) => arr.indexOf(v) === i);
 
-  for (const variant of symbolVariants) {
+  for (const variant of variants) {
     try {
       const url = `https://www.screener.in/company/${encodeURIComponent(variant)}/`;
       const resp = await axios.get(url, {
         timeout: HTTP_TIMEOUT,
-        headers: {
-          'User-Agent': UA,
-          'Accept': 'text/html',
-          'Referer': 'https://www.screener.in/',
-        },
+        headers: { 'User-Agent': UA, 'Accept': 'text/html', 'Referer': 'https://www.screener.in/' },
         validateStatus: s => s === 200,
       });
 
       const html: string = resp.data ?? '';
-      if (!html || html.length < 500) continue;
+      if (!html || html.length < 1000) continue;
 
-      // Parse id="top-ratios" section
-      // Each ratio: <span class="name">Label</span> ... <span class="number ...">Value</span>
+      // Parse each <li> in top-ratios: name span → number span
+      // Confirmed pattern from live HTML inspection
       const ratioMap: Record<string, number> = {};
-      const ratioRe = /<span[^>]*class="[^"]*name[^"]*"[^>]*>\s*([\w\s\/\-\.&%]+?)\s*<\/span>[\s\S]{0,300}?<span[^>]*class="[^"]*number[^"]*"[^>]*>\s*([\d,.\-]+)\s*<\/span>/gi;
+      const liRe = /<li[^>]*>[\s\S]*?<span[^>]*class="name"[^>]*>\s*([\s\S]*?)\s*<\/span>[\s\S]*?<span[^>]*class="number"[^>]*>\s*([\d,.\-]+)\s*<\/span>/gi;
       let m: RegExpExecArray | null;
-      while ((m = ratioRe.exec(html)) !== null) {
-        const key = m[1].trim().toLowerCase();
+      while ((m = liRe.exec(html)) !== null) {
+        const key = m[1].replace(/\s+/g, ' ').trim().toLowerCase();
         const val = parseFloat(m[2].replace(/,/g, ''));
-        if (!isNaN(val)) ratioMap[key] = val;
+        if (!isNaN(val) && key.length > 0) ratioMap[key] = val;
       }
 
-      // Helper: find first matching key
+      // Helper: find value by partial key match
       const get = (...keys: string[]): number | null => {
         for (const k of keys) {
           for (const [rk, rv] of Object.entries(ratioMap)) {
@@ -226,32 +226,34 @@ export async function fetchScreenerFundamentals(symbol: string): Promise<Screene
         return null;
       };
 
-      // Must have at least ROE or ROCE to be a valid parse
-      const roe  = get('roe', 'return on equity');
-      const roce = get('roce', 'return on capital');
+      // Validate: must have at least ROE or ROCE (otherwise page didn't load properly)
+      const roe  = get('roe');
+      const roce = get('roce');
       if (roe === null && roce === null) continue;
 
-      // Promoter holding — look for latest % in shareholding section
-      const promoterMatch = html.match(/[Pp]romoters?[\s\S]{0,200}?(\d{1,2}\.\d{1,2})\s*%/);
+      // Promoter% — first <td> after "Promoters" in shareholding table
+      // Pattern: Promoters&nbsp;...  <td>50.41%</td>
+      const promoterMatch = html.match(/Promoters[\s\S]{0,400}?<td[^>]*>\s*(\d{1,2}\.\d{1,2})%/);
       const promoterHolding = promoterMatch ? parseFloat(promoterMatch[1]) : null;
 
-      // D/E ratio — sometimes in a separate table row
-      const deRe = /[Dd]ebt\s*[\/\-]?\s*[Ee]quity[\s\S]{0,200}?(\d+\.?\d*)/;
-      const deMatch = html.match(deRe);
-      const debtToEquity = deMatch ? parseFloat(deMatch[1]) : get('debt to equity', 'd/e', 'debt/equity');
+      // D/E — not in top-ratios, look in the ratios table rows
+      // Pattern: <td class="text">Debt to equity</td> ... <td>0.35</td>
+      const deMatch = html.match(/[Dd]ebt\s+to\s+[Ee]quity[\s\S]{0,300}?<td[^>]*>\s*([\d.]+)\s*<\/td>/);
+      const debtToEquity = deMatch ? parseFloat(deMatch[1]) : null;
 
-      // Compounded growth — look for "3 Years" rows near sales/profit growth tables
-      const salesGrowthMatch = html.match(/[Ss]ales\s+[Gg]rowth[\s\S]{0,500}?3\s+[Yy]ears?[\s\S]{0,100}?(\-?\d+\.?\d*)\s*%/);
-      const profitGrowthMatch = html.match(/[Pp]rofit\s+[Gg]rowth[\s\S]{0,500}?3\s+[Yy]ears?[\s\S]{0,100}?(\-?\d+\.?\d*)\s*%/);
+      // 3yr compounded growth — from growth tables
+      // Pattern: Compounded Sales Growth ... 3 Years ... value%
+      const salesGrowthMatch = html.match(/Compounded\s+Sales\s+Growth[\s\S]{0,600}?3\s+Years[\s\S]{0,200}?<td[^>]*>\s*(-?\d+\.?\d*)\s*%/i);
+      const profitGrowthMatch = html.match(/Compounded\s+Profit\s+Growth[\s\S]{0,600}?3\s+Years[\s\S]{0,200}?<td[^>]*>\s*(-?\d+\.?\d*)\s*%/i);
 
       const data: ScreenerFundamentals = {
         symbol,
-        pe:              get('stock p/e', 'p/e', 'price to earning'),
+        pe:             get('stock p/e', 'p/e'),
         roe,
         roce,
-        debtToEquity:    debtToEquity ?? null,
-        promoterHolding: promoterHolding,
-        salesGrowth3yr:  salesGrowthMatch ? parseFloat(salesGrowthMatch[1]) : null,
+        debtToEquity,
+        promoterHolding,
+        salesGrowth3yr:  salesGrowthMatch  ? parseFloat(salesGrowthMatch[1])  : null,
         profitGrowth3yr: profitGrowthMatch ? parseFloat(profitGrowthMatch[1]) : null,
         dividendYield:   get('dividend yield'),
         currentRatio:    get('current ratio'),

@@ -1262,8 +1262,17 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
       roce: enrichedData?.screener?.roce ?? null,
       debtToEquity: enrichedData?.screener?.debtToEquity ?? null,
       promoterHolding: enrichedData?.screener?.promoterHolding ?? null,
-      weekHigh52: enrichedData?.yahoo?.weekHigh52 ?? null,
-      weekLow52: enrichedData?.yahoo?.weekLow52 ?? null,
+      // 52W high/low: Yahoo enrichment first, then compute from real candles (last 252 trading days)
+      weekHigh52: enrichedData?.yahoo?.weekHigh52 ?? (() => {
+        if (!realCandles || realCandles.length < 20) return null;
+        const yr = realCandles.slice(-252);
+        return Number(Math.max(...yr.map(c => c.high)).toFixed(2));
+      })(),
+      weekLow52: enrichedData?.yahoo?.weekLow52 ?? (() => {
+        if (!realCandles || realCandles.length < 20) return null;
+        const yr = realCandles.slice(-252);
+        return Number(Math.min(...yr.map(c => c.low)).toFixed(2));
+      })(),
       deliveryPct: null,
       pChange: enrichedData?.yahoo?.pChange ?? ohlcvChangePct ?? (perSymbolPriceCache.get(profile.symbol)?.changePct ?? null),
       fundamentalScore: enrichedData ? computeFundamentalScore(enrichedData) : null,
@@ -4130,8 +4139,18 @@ Respond ONLY with this JSON structure (fill every field):
                 ? Number(seriesCache[i].closes[seriesCache[i].closes.length - 1].toFixed(2))
                 : null,
         pChange:          enriched?.yahoo?.pChange ?? mbChangePct ?? (mbCachedPriceValid ? mbCachedPrice!.changePct : null),
-        weekHigh52:       enriched?.yahoo?.weekHigh52 ?? null,
-        weekLow52:        enriched?.yahoo?.weekLow52 ?? null,
+        weekHigh52:       enriched?.yahoo?.weekHigh52 ?? (() => {
+          const mbCandles = mbRealOHLCVMap.get(profile.symbol);
+          if (!mbCandles || mbCandles.length < 20) return null;
+          const yr = mbCandles.slice(-252);
+          return Number(Math.max(...yr.map(c => c.high)).toFixed(2));
+        })(),
+        weekLow52:        enriched?.yahoo?.weekLow52 ?? (() => {
+          const mbCandles = mbRealOHLCVMap.get(profile.symbol);
+          if (!mbCandles || mbCandles.length < 20) return null;
+          const yr = mbCandles.slice(-252);
+          return Number(Math.min(...yr.map(c => c.low)).toFixed(2));
+        })(),
         deliveryPct:      null,
         pe:               enriched?.yahoo?.pe ?? enriched?.screener?.pe ?? null,
         roe:              enriched?.screener?.roe ?? null,
