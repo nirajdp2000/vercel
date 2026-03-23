@@ -1,10 +1,13 @@
-fix: include today's candle for 1D interval — prices now consistent across timeframes
+fix: live price now streams every second regardless of timeframe via Yahoo Finance
 
-Root cause: Upstox historical endpoint never returns today's in-progress candle
-for ANY interval (not just intraday). So 1D was showing Friday's close (1414)
-while 5M was showing today's live close (1394) — a visible price mismatch.
+Root cause: SSE stream used Upstox v2 LTP endpoint which returned 401 (token
+lacks market-data-feed scope). Price showed "LAST CLOSE" instead of live.
 
-Fix: extend needsIntradayToday to cover day interval too (only week/month excluded).
-Now 1D fetches past days via historical + today's daily candle via intraday endpoint.
-
-Verified: HDFC Bank 1D shows 23/3/2026 close 754.55, 5M shows 754.25 — consistent.
+Changes:
+- SSE now tries Upstox v3/market-quote/ltp first (same token scope as historical)
+- On any Upstox failure, falls back to Yahoo Finance (SYMBOL.NS) — no auth needed
+- SSE endpoint accepts ?symbol=HDFCBANK param for Yahoo fallback lookup
+- App.tsx passes selectedStock.symbol in SSE URL
+- Change/changePercent computed from cp (previous close) in v3 response
+- Verified: HDFCBANK ticks at 751.65 every second, source=yahoo, -3.69% change
+- Price display is now timeframe-independent (SSE is separate from chart data)

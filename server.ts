@@ -2185,11 +2185,14 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
    * Sends no_auth events when Upstox token is unavailable.
    */
   app.get("/api/stocks/stream", (req, res) => {
-    const { instrumentKey } = req.query;
+    const { instrumentKey, symbol } = req.query;
     if (!instrumentKey) {
       res.status(400).end();
       return;
     }
+
+    // NSE symbol for Yahoo Finance fallback (e.g. "HDFCBANK" → "HDFCBANK.NS")
+    const yahooSymbol = symbol ? `${String(symbol)}.NS` : null;
 
     // SSE headers
     res.setHeader("Content-Type", "text/event-stream");
@@ -2227,7 +2230,7 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
         }
 
         const encodedKey = encodeURIComponent(String(instrumentKey));
-        const url = `https://api.upstox.com/v2/market-quote/ltp?instrument_key=${encodedKey}`;
+        const url = `https://api.upstox.com/v3/market-quote/ltp?instrument_key=${encodedKey}`;
 
         const response = await axios.get(url, {
           headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
@@ -2240,6 +2243,7 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
           return;
         }
 
+        // v3 response key uses ':' separator (e.g. "NSE_EQ:INE040A01034")
         const key = Object.keys(quoteData)[0];
         const quote = quoteData[key];
         const ltp: number = quote?.last_price;
@@ -2249,14 +2253,21 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
           return;
         }
 
+        // Compute change from previous close (cp field in v3)
+        const prevClose: number | null = quote?.cp ?? null;
+        const change = prevClose != null ? ltp - prevClose : (quote?.net_change ?? null);
+        const changePercent = prevClose != null && prevClose > 0
+          ? ((ltp - prevClose) / prevClose) * 100
+          : (quote?.net_change_percentage ?? null);
+
         const direction = lastLtp !== null ? (ltp > lastLtp ? "up" : ltp < lastLtp ? "down" : "flat") : "flat";
         lastLtp = ltp;
 
         sendEvent({
           type: "tick",
           ltp,
-          change: quote?.net_change ?? null,
-          changePercent: quote?.net_change_percentage ?? null,
+          change,
+          changePercent,
           direction,
           ts: Date.now(),
         });
@@ -2274,12 +2285,32 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
         const msg = upstoxError?.message || err.message;
         const code = upstoxError?.errorCode || `HTTP_${status || 'ERR'}`;
 
-        console.error(`[SSE] Tick error for ${instrumentKey}: [${code}] ${msg}`);
+        // Try Yahoo Finance fallback when Upstox fails (401, token issues, etc.)
+        if (yahooSymbol) {
+          try {
+            const encoded = encodeURIComponent(yahooSymbol);
+            const yUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?interval=1d&range=1d`;
+            const yResp = await axios.get(yUrl, {
+              timeout: 5000,
+              headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+            });
+            const meta = yResp.data?.chart?.result?.[0]?.meta;
+            if (meta?.regularMarketPrice) {
+              const ltp = meta.regularMarketPrice;
+              const prevClose = meta.chartPreviousClose ?? meta.previousClose ?? null;
+              const change = prevClose ? ltp - prevClose : null;
+              const changePercent = prevClose && prevClose > 0 ? ((ltp - prevClose) / prevClose) * 100 : null;
+              const direction = lastLtp !== null ? (ltp > lastLtp ? "up" : ltp < lastLtp ? "down" : "flat") : "flat";
+              lastLtp = ltp;
+              sendEvent({ type: "tick", ltp, change, changePercent, direction, ts: Date.now(), source: "yahoo" });
+              return;
+            }
+          } catch (_ye) { /* Yahoo also failed */ }
+        }
 
-        // Always send error event so client knows what's wrong
+        console.error(`[SSE] Tick error for ${instrumentKey}: [${code}] ${msg}`);
         sendEvent({ type: "error", message: msg, code });
 
-        // If token is invalid/expired, send no_auth so client shows connect prompt
         if (status === 401 || code === 'UDAPI100011') {
           sendEvent({ type: "no_auth", message: "Upstox token expired. Please re-authenticate." });
         }

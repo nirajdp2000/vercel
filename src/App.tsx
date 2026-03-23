@@ -338,7 +338,7 @@ export default function App() {
     liveIntervalRef.current = interval;
 
     const sse = new EventSource(
-      `/api/stocks/stream?instrumentKey=${encodeURIComponent(selectedStock.key)}`
+      `/api/stocks/stream?instrumentKey=${encodeURIComponent(selectedStock.key)}&symbol=${encodeURIComponent(selectedStock.symbol)}`
     );
     sseRef.current = sse;
 
