@@ -174,71 +174,94 @@ export async function fetchYahooFundamentals(symbol: string): Promise<YahooFunda
   return null;
 }
 
-// ─── 2. Screener.in JSON API ──────────────────────────────────────────────────
-// Screener exposes a public JSON endpoint — much faster than HTML scraping
+// ─── 2. Screener.in HTML scraping ────────────────────────────────────────────
+// Screener /api/company/ returns 404 for all stocks — use HTML scraping instead.
+// The HTML page has id="top-ratios" with all key fundamentals.
 
 export async function fetchScreenerFundamentals(symbol: string): Promise<ScreenerFundamentals | null> {
   const cached = screenerCache.get(symbol);
   if (cached && cached.expiresAt > Date.now()) return cached.data;
 
-  // Screener.in uses NSE symbol for most stocks, but BSE-only stocks may need
-  // a different lookup. Try multiple formats in order.
+  // Try URL variants: plain symbol, hyphenated (TATA-MOTORS), no-hyphen (BAJAJAUTO)
   const symbolVariants = [
-    symbol,                                    // BLOOM → try as-is first
-    symbol.replace(/-/g, ''),                  // BAJAJ-AUTO → BAJAJAUTO
     symbol.toUpperCase(),
-  ].filter((v, i, arr) => arr.indexOf(v) === i); // deduplicate
+    symbol.toUpperCase().replace(/-/g, '-').replace(/&/g, ''),  // M&M → MM
+    symbol.toUpperCase().replace(/-/g, ''),                      // BAJAJ-AUTO → BAJAJAUTO
+  ].filter((v, i, arr) => arr.indexOf(v) === i);
 
   for (const variant of symbolVariants) {
     try {
-      const url = `https://www.screener.in/api/company/${encodeURIComponent(variant)}/`;
+      const url = `https://www.screener.in/company/${encodeURIComponent(variant)}/`;
       const resp = await axios.get(url, {
         timeout: HTTP_TIMEOUT,
         headers: {
           'User-Agent': UA,
-          'Accept': 'application/json',
-          'Referer': 'https://www.screener.in',
+          'Accept': 'text/html',
+          'Referer': 'https://www.screener.in/',
         },
+        validateStatus: s => s === 200,
       });
 
-      const d = resp.data;
-      if (!d || typeof d !== 'object') continue;
+      const html: string = resp.data ?? '';
+      if (!html || html.length < 500) continue;
 
-      // Screener JSON structure: ratios array with name/value pairs
-      const ratios: Array<{ name: string; value: string }> = d.ratios ?? [];
-      if (ratios.length === 0) continue; // empty response — try next variant
+      // Parse id="top-ratios" section
+      // Each ratio: <span class="name">Label</span> ... <span class="number ...">Value</span>
+      const ratioMap: Record<string, number> = {};
+      const ratioRe = /<span[^>]*class="[^"]*name[^"]*"[^>]*>\s*([\w\s\/\-\.&%]+?)\s*<\/span>[\s\S]{0,300}?<span[^>]*class="[^"]*number[^"]*"[^>]*>\s*([\d,.\-]+)\s*<\/span>/gi;
+      let m: RegExpExecArray | null;
+      while ((m = ratioRe.exec(html)) !== null) {
+        const key = m[1].trim().toLowerCase();
+        const val = parseFloat(m[2].replace(/,/g, ''));
+        if (!isNaN(val)) ratioMap[key] = val;
+      }
 
-      const getVal = (name: string): number | null => {
-        const r = ratios.find(x => x.name?.toLowerCase().includes(name.toLowerCase()));
-        if (!r) return null;
-        const v = parseFloat(String(r.value ?? '').replace(/[,%]/g, '').trim());
-        return isNaN(v) ? null : v;
+      // Helper: find first matching key
+      const get = (...keys: string[]): number | null => {
+        for (const k of keys) {
+          for (const [rk, rv] of Object.entries(ratioMap)) {
+            if (rk.includes(k.toLowerCase())) return rv;
+          }
+        }
+        return null;
       };
 
-      // Compounded growth from separate arrays
-      const salesGrowth  = d.compounded_sales_growth?.find((x: any) => x.name === '3 Years')?.value ?? null;
-      const profitGrowth = d.compounded_profit_growth?.find((x: any) => x.name === '3 Years')?.value ?? null;
-      const promoterData = d.shareholding?.find((x: any) => x.name?.toLowerCase().includes('promoter'));
-      const promoterPct  = promoterData?.value ? parseFloat(String(promoterData.value).replace('%', '')) : null;
+      // Must have at least ROE or ROCE to be a valid parse
+      const roe  = get('roe', 'return on equity');
+      const roce = get('roce', 'return on capital');
+      if (roe === null && roce === null) continue;
+
+      // Promoter holding — look for latest % in shareholding section
+      const promoterMatch = html.match(/[Pp]romoters?[\s\S]{0,200}?(\d{1,2}\.\d{1,2})\s*%/);
+      const promoterHolding = promoterMatch ? parseFloat(promoterMatch[1]) : null;
+
+      // D/E ratio — sometimes in a separate table row
+      const deRe = /[Dd]ebt\s*[\/\-]?\s*[Ee]quity[\s\S]{0,200}?(\d+\.?\d*)/;
+      const deMatch = html.match(deRe);
+      const debtToEquity = deMatch ? parseFloat(deMatch[1]) : get('debt to equity', 'd/e', 'debt/equity');
+
+      // Compounded growth — look for "3 Years" rows near sales/profit growth tables
+      const salesGrowthMatch = html.match(/[Ss]ales\s+[Gg]rowth[\s\S]{0,500}?3\s+[Yy]ears?[\s\S]{0,100}?(\-?\d+\.?\d*)\s*%/);
+      const profitGrowthMatch = html.match(/[Pp]rofit\s+[Gg]rowth[\s\S]{0,500}?3\s+[Yy]ears?[\s\S]{0,100}?(\-?\d+\.?\d*)\s*%/);
 
       const data: ScreenerFundamentals = {
         symbol,
-        pe:               getVal('P/E') ?? getVal('price to earning'),
-        roe:              getVal('ROE') ?? getVal('return on equity'),
-        roce:             getVal('ROCE') ?? getVal('return on capital'),
-        debtToEquity:     getVal('Debt to equity') ?? getVal('D/E'),
-        promoterHolding:  isNaN(promoterPct as number) ? null : promoterPct,
-        salesGrowth3yr:   salesGrowth ? parseFloat(String(salesGrowth).replace('%', '')) : null,
-        profitGrowth3yr:  profitGrowth ? parseFloat(String(profitGrowth).replace('%', '')) : null,
-        dividendYield:    getVal('Dividend Yield'),
-        currentRatio:     getVal('Current ratio'),
-        dataSource:       'SCREENER',
+        pe:              get('stock p/e', 'p/e', 'price to earning'),
+        roe,
+        roce,
+        debtToEquity:    debtToEquity ?? null,
+        promoterHolding: promoterHolding,
+        salesGrowth3yr:  salesGrowthMatch ? parseFloat(salesGrowthMatch[1]) : null,
+        profitGrowth3yr: profitGrowthMatch ? parseFloat(profitGrowthMatch[1]) : null,
+        dividendYield:   get('dividend yield'),
+        currentRatio:    get('current ratio'),
+        dataSource:      'SCREENER',
       };
 
       screenerCache.set(symbol, { data, expiresAt: Date.now() + SCREENER_TTL });
       return data;
     } catch (_e) {
-      continue; // try next variant
+      continue;
     }
   }
 
@@ -330,11 +353,17 @@ export async function fetchStockNews(symbol: string): Promise<string[]> {
  *   enrichStocksBackground(top10Symbols);  // no await
  */
 export async function enrichStocksBackground(symbols: string[]): Promise<void> {
-  // Only enrich symbols not already being warmed or cached
+  const THIRTY_MIN = 30 * 60_000;
+  const now = Date.now();
+
+  // Skip symbols already warming, or cached within last 30 min (both yahoo + screener)
   const toEnrich = symbols.filter(s => {
     if (warmingSet.has(s)) return false;
     const yc = yahooFundCache.get(s);
-    if (yc && yc.expiresAt > Date.now()) return false;
+    const sc = screenerCache.get(s);
+    // Skip if both caches are fresh (within 30 min)
+    if (yc && yc.expiresAt > now + (YAHOO_FUND_TTL - THIRTY_MIN)) return false;
+    if (sc && sc.expiresAt > now + (SCREENER_TTL - THIRTY_MIN)) return false;
     return true;
   });
 
@@ -342,24 +371,22 @@ export async function enrichStocksBackground(symbols: string[]): Promise<void> {
 
   toEnrich.forEach(s => warmingSet.add(s));
 
-  // Process in small batches of 5 to avoid overwhelming free endpoints
-  const BATCH = 5;
+  // Process in batches of 3 — Screener HTML scraping is heavier than JSON
+  const BATCH = 3;
   for (let i = 0; i < toEnrich.length; i += BATCH) {
     const batch = toEnrich.slice(i, i + BATCH);
     await Promise.allSettled(batch.map(async (symbol) => {
       try {
-        await Promise.allSettled([
-          fetchYahooFundamentals(symbol),
-          fetchScreenerFundamentals(symbol),
-          fetchStockNews(symbol),
-        ]);
+        // Yahoo first (fast), then Screener HTML (slower), skip news to save CPU
+        await fetchYahooFundamentals(symbol);
+        await fetchScreenerFundamentals(symbol);
       } finally {
         warmingSet.delete(symbol);
       }
     }));
-    // Small gap between batches to be polite to free endpoints
+    // 500ms gap between batches — Screener rate-limit friendly
     if (i + BATCH < toEnrich.length) {
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise(r => setTimeout(r, 500));
     }
   }
 }
