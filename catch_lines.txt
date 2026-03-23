@@ -1,0 +1,56 @@
+1585:    } catch (error: any) {
+1683:    } catch (error: any) {
+1802:    } catch (error: any) {
+1881:    } catch (error: any) {
+1896:    } catch (error: any) {
+1918:      } catch (error) {
+1973:    } catch (error: any) {
+1999:    } catch (error: any) {
+2045:    } catch (error: any) {
+2077:      } catch (_e) {
+2084:      try { res.write(`: heartbeat\n\n`); } catch (_e) { /* disconnected */ }
+2141:      } catch (err: any) {
+2330:    } catch (_e) { hedgeFundData = null; }
+2345:  } catch (error: any) {
+2669:      } catch (_e) { /* fall through to simulated */ }
+2919:    } catch (_err) {
+2958:    } catch (_err) {
+3602:    const newsIntel = await fetchNewsIntelligence().catch(() => null);
+3605:    const macroCtx = await buildMacroRegimeContext().catch(() => null);
+3608:    const orbSignals = await getOrbSignals().catch(() => null);
+3982:    } catch (_e) { /* non-blocking � fall back to synthetic prices */ }
+4186:    } catch (_e) {
+4207:        const q = await fetchYahooQuote(`${sym}.NS`).catch(() => null);
+4399:    } catch (err: any) {
+4412:        saveRankingsSnapshot(today, base.rankings.slice(0, 50)).catch(e =>
+4417:    } catch (err: any) {
+4430:        saveRankingsSnapshot(today, base.rankings.slice(0, 50)).catch(e =>
+4435:    } catch (err: any) {
+4445:    } catch (err: any) {
+4454:    } catch (err: any) {
+4468:    } catch (err: any) {
+4479:      const newsIntel = await fetchNewsIntelligence().catch(() => null);
+4506:    } catch (err: any) {
+4516:    } catch (err: any) {
+4801:          } catch (_e) { /* skip */ }
+4850:      } catch (e: any) {
+4915:      } catch (e: any) {
+4929:      if (!predRunning) await runPredictionScan().catch(e => console.error('[PredictionScan]', e));
+4941:      runPredictionScan().catch(e => console.error('[PredictionScan]', e));
+4950:    } catch (e: any) {
+4964:    } catch (e: any) {
+4973:    } catch (e: any) {
+5013:    } catch (e: any) {
+5026:    } catch (e: any) {
+5067:      } catch (e: any) { console.error('[RankingsHistory] Supabase exception:', e.message); }
+5084:      } catch (_e) {}
+5098:      } catch (_e) {}
+5113:      } catch (_e) {}
+5133:    catch { res.json({ dates: [], annotated: [] }); }
+5168:    } catch (e: any) { res.status(500).json({ error: e.message }); }
+5175:    } catch (e: any) { res.status(500).json({ error: e.message }); }
+5265:    } catch (e: any) { res.status(500).json({ error: e.message }); }
+5275:    } catch (e: any) { res.status(500).json({ error: e.message }); }
+5315:    initUniverse().catch(err =>
+5340:  } catch (err: any) {
+5348:  startServer().catch((error) => {

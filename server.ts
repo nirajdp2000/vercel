@@ -16,7 +16,7 @@ import { OrbVwapEngine } from "./src/services/upstox/OrbVwapEngine";
 import { PredictionStorageService } from "./src/services/PredictionStorageService";
 import { getSupabaseClient } from "./src/lib/supabase";
 import { fetchNewsIntelligence, getStockSentiment, getTopNews, getSectorSentiment } from "./src/services/NewsIntelligenceService";
-import { enrichStocks, fetchFIIDIIData, computeFundamentalScore, type EnrichedStockData } from "./src/services/MarketDataAggregator";
+import { enrichStocksBackground, getEnrichedFromCache, fetchFIIDIIData, computeFundamentalScore, type EnrichedStockData } from "./src/services/MarketDataAggregator";
 
 import path from "path";
 import fs from "fs";
@@ -957,11 +957,11 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
     const maxDrawdown = calculateMaxDrawdown(closes);
     const growthRatio = fiveYearPrice > 0 ? endPrice / fiveYearPrice : 0;
     // Use real Screener.in fundamentals when available, else estimate from price history
-    const earningsGrowth = enrichedData?.fundamentals?.profitGrowth3yr != null
-      ? Math.max(0, enrichedData.fundamentals.profitGrowth3yr)
+    const earningsGrowth = enrichedData?.screener?.profitGrowth3yr != null
+      ? Math.max(0, enrichedData.screener.profitGrowth3yr)
       : Math.max(0, cagr * 0.72 + random() * 18);
-    const revenueGrowth = enrichedData?.fundamentals?.salesGrowth3yr != null
-      ? Math.max(0, enrichedData.fundamentals.salesGrowth3yr)
+    const revenueGrowth = enrichedData?.screener?.salesGrowth3yr != null
+      ? Math.max(0, enrichedData.screener.salesGrowth3yr)
       : Math.max(0, cagr * 0.58 + random() * 14);
     const recentVolume = average(candles.slice(-Math.max(20, Math.floor(candles.length / 10))).map((candle) => candle.volume));
     const volumeGrowth = earlyVolume > 0 ? recentVolume / earlyVolume : 1;
@@ -1061,22 +1061,22 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
       sector: profile.sector,
       industry: profile.industry,
       marketCap: profile.marketCap,
-      // Use NSE real-time price when available, then Yahoo OHLCV last close, then synthetic
-      currentPrice: enrichedData?.quote?.lastPrice
-        ? Number(enrichedData.quote.lastPrice.toFixed(2))
+      // Use Yahoo real-time price when available, then OHLCV last close, then synthetic
+      currentPrice: enrichedData?.yahoo?.lastPrice
+        ? Number(enrichedData.yahoo.lastPrice.toFixed(2))
         : Number(endPrice.toFixed(2)),
-      dataSource: enrichedData?.quote ? 'real' : (realCandles && realCandles.length >= 60) ? 'real' : 'synthetic',
-      // Enriched fields from NSE + Screener.in
-      pe: enrichedData?.fundamentals?.pe ?? null,
-      pb: enrichedData?.fundamentals?.pb ?? null,
-      roe: enrichedData?.fundamentals?.roe ?? null,
-      roce: enrichedData?.fundamentals?.roce ?? null,
-      debtToEquity: enrichedData?.fundamentals?.debtToEquity ?? null,
-      promoterHolding: enrichedData?.fundamentals?.promoterHolding ?? null,
-      weekHigh52: enrichedData?.quote?.weekHigh52 ?? null,
-      weekLow52: enrichedData?.quote?.weekLow52 ?? null,
-      deliveryPct: enrichedData?.quote?.deliveryPct ?? null,
-      pChange: enrichedData?.quote?.pChange ?? null,
+      dataSource: enrichedData?.yahoo ? 'real' : (realCandles && realCandles.length >= 60) ? 'real' : 'synthetic',
+      // Enriched fields from Yahoo + Screener.in
+      pe: enrichedData?.yahoo?.pe ?? enrichedData?.screener?.pe ?? null,
+      pb: enrichedData?.yahoo?.priceToBook ?? null,
+      roe: enrichedData?.screener?.roe ?? null,
+      roce: enrichedData?.screener?.roce ?? null,
+      debtToEquity: enrichedData?.screener?.debtToEquity ?? null,
+      promoterHolding: enrichedData?.screener?.promoterHolding ?? null,
+      weekHigh52: enrichedData?.yahoo?.weekHigh52 ?? null,
+      weekLow52: enrichedData?.yahoo?.weekLow52 ?? null,
+      deliveryPct: null,
+      pChange: enrichedData?.yahoo?.pChange ?? null,
       fundamentalScore: enrichedData ? computeFundamentalScore(enrichedData) : null,
       dataQuality: enrichedData?.dataQuality ?? (realCandles && realCandles.length >= 60 ? 'MEDIUM' : 'LOW'),
       newsHeadlines: enrichedData?.newsHeadlines ?? [],
@@ -1346,13 +1346,15 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
       })
     );
 
-    // ── Pass 3: Enrich top 50 with NSE quote + Screener.in fundamentals ──
+    // ── Pass 3: Enrich top 50 — read from cache only (zero network, safe for Vercel) ──
     const top50Symbols = [...syntheticUniverse]
       .sort((a, b) => b.score - a.score)
       .slice(0, 50)
       .map(r => r.symbol);
-    const enrichedMap = await enrichStocks(top50Symbols).catch(() => new Map<string, EnrichedStockData>());
-    const fiiDii = await fetchFIIDIIData().catch(() => null);
+    // Build enriched map from cache (no await, no network)
+    const enrichedMap = new Map<string, EnrichedStockData>(
+      top50Symbols.map(s => [s, getEnrichedFromCache(s)])
+    );
 
     // ── Pass 4: Re-score top 150 with real OHLCV + enriched fundamentals ──
     const analyzedUniverse = rawUniverse.map((profile) =>
@@ -1416,7 +1418,7 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
       buySignals: results.filter((item) => item.rlAction === "BUY").length
     };
 
-    return {
+    const dashboard = {
       results,
       alerts,
       sectors,
@@ -1424,6 +1426,11 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
       summary,
       architecture: ultraArchitecture
     };
+
+    // Fire-and-forget background cache warm for next request — never blocks response
+    enrichStocksBackground(top50Symbols).catch(() => {});
+
+    return dashboard;
   };
 
   const historicalCache = new Map<string, { expiresAt: number; payload: any }>();
@@ -3678,13 +3685,16 @@ Respond ONLY with this JSON structure (fill every field):
       })
     );
 
-    // ── Pass 3: Enrich top 50 with NSE quote + Screener.in fundamentals ──
+    // ── Pass 3: Enrich top 50 — read from cache only (zero network, safe for Vercel) ──
     const mbTop50Symbols = universe
       .map((p, i) => ({ symbol: p.symbol, ret: synthCycleReturns[i] }))
       .sort((a, b) => b.ret - a.ret)
       .slice(0, 50)
       .map(x => x.symbol);
-    const mbEnrichedMap = await enrichStocks(mbTop50Symbols).catch(() => new Map<string, EnrichedStockData>());
+    // Build enriched map from cache (no await, no network)
+    const mbEnrichedMap = new Map<string, EnrichedStockData>(
+      mbTop50Symbols.map(s => [s, getEnrichedFromCache(s)])
+    );
 
     // Step 1: Build price/volume series — real data for top 150, synthetic for rest
     const seriesCache = universe.map((p) => mbBuildSeries(p, cycleDays, mbRealOHLCVMap.get(p.symbol) ?? null));
@@ -3741,20 +3751,20 @@ Respond ONLY with this JSON structure (fill every field):
         symbol:           profile.symbol,
         companyName:      MB_COMPANY_NAMES[profile.symbol] ?? `${profile.symbol} Ltd`,
         sector:           profile.sector,
-        dataSource:       enriched?.quote ? 'real' : hasRealOHLCV ? 'real' : 'synthetic',
-        // Use NSE real-time price first, then Yahoo OHLCV last close
-        currentPrice:     enriched?.quote?.lastPrice
-          ? Number(enriched.quote.lastPrice.toFixed(2))
+        dataSource:       enriched?.yahoo ? 'real' : hasRealOHLCV ? 'real' : 'synthetic',
+        // Use Yahoo real-time price first, then OHLCV last close
+        currentPrice:     enriched?.yahoo?.lastPrice
+          ? Number(enriched.yahoo.lastPrice.toFixed(2))
           : Number(seriesCache[i].closes[seriesCache[i].closes.length - 1].toFixed(2)),
-        pChange:          enriched?.quote?.pChange ?? null,
-        weekHigh52:       enriched?.quote?.weekHigh52 ?? null,
-        weekLow52:        enriched?.quote?.weekLow52 ?? null,
-        deliveryPct:      enriched?.quote?.deliveryPct ?? null,
-        pe:               enriched?.fundamentals?.pe ?? null,
-        roe:              enriched?.fundamentals?.roe ?? null,
-        roce:             enriched?.fundamentals?.roce ?? null,
-        debtToEquity:     enriched?.fundamentals?.debtToEquity ?? null,
-        promoterHolding:  enriched?.fundamentals?.promoterHolding ?? null,
+        pChange:          enriched?.yahoo?.pChange ?? null,
+        weekHigh52:       enriched?.yahoo?.weekHigh52 ?? null,
+        weekLow52:        enriched?.yahoo?.weekLow52 ?? null,
+        deliveryPct:      null,
+        pe:               enriched?.yahoo?.pe ?? enriched?.screener?.pe ?? null,
+        roe:              enriched?.screener?.roe ?? null,
+        roce:             enriched?.screener?.roce ?? null,
+        debtToEquity:     enriched?.screener?.debtToEquity ?? null,
+        promoterHolding:  enriched?.screener?.promoterHolding ?? null,
         fundamentalScore: enriched ? computeFundamentalScore(enriched) : null,
         dataQuality:      enriched?.dataQuality ?? (hasRealOHLCV ? 'MEDIUM' : 'LOW'),
         newsHeadlines:    enriched?.newsHeadlines ?? [],
@@ -3812,6 +3822,10 @@ Respond ONLY with this JSON structure (fill every field):
     };
 
     multibaggerCache.set(cycleDays, { expiresAt: Date.now() + MULTIBAGGER_CACHE_TTL[cycleDays], payload });
+
+    // Fire-and-forget background cache warm for next request — never blocks response
+    enrichStocksBackground(mbTop50Symbols).catch(() => {});
+
     return payload;
   };
 
@@ -3838,13 +3852,13 @@ Respond ONLY with this JSON structure (fill every field):
 
   // ── Multi-source enrichment endpoints ──────────────────────────────────────
 
-  /** GET /api/stock/enrich?symbol=RELIANCE — NSE quote + Screener fundamentals + news */
+  /** GET /api/stock/enrich?symbol=RELIANCE — Yahoo fundamentals + Screener + news */
   app.get("/api/stock/enrich", async (req, res) => {
     const symbol = String(req.query.symbol ?? '').toUpperCase().trim();
     if (!symbol) return res.status(400).json({ error: 'symbol required' });
-    const enriched = await enrichStocks([symbol]).catch(() => new Map());
-    const data = enriched.get(symbol) ?? null;
-    if (!data) return res.status(404).json({ error: 'No data found', symbol });
+    // Trigger background fetch then return whatever is cached
+    enrichStocksBackground([symbol]).catch(() => {});
+    const data = getEnrichedFromCache(symbol);
     res.json(data);
   });
 

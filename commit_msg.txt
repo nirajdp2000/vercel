@@ -1,10 +1,12 @@
-feat: Institutional tab self-contained — auto-loads default stock, no Analytics tab required
+fix: resolve FUNCTION_INVOCATION_TIMEOUT — background enrichment pattern
 
-- Added DEFAULT_STOCKS list (Reliance, HDFC Bank, Infosys, TCS, ICICI Bank)
-- Added selfStock/selfCandles/selfLoading state inside InstitutionalAnalytics
-- Auto-fetches 30-day daily candles for selected stock on mount when prop candles absent
-- Stock selector dropdown shown in header when no stock selected on Analytics tab
-- effectiveCandles/effectiveSymbol/effectiveKey derived: prop values take priority, self-fetched as fallback
-- All internal logic (useEffect, derived, heatmap, volume profile) uses effectiveCandles
-- Loading indicator shown while self-fetching
-- canAnalyze now works with effectiveCandles so AI Deep Scan enabled after self-fetch
+- Replace enrichStocks() (blocking) with enrichStocksBackground() + getEnrichedFromCache()
+- Both buildUltraQuantDashboard and buildMultibaggerScan now read enrichment
+  from in-memory cache only (zero network latency in scan pipeline)
+- Background warm fires after scan response is sent (fire-and-forget)
+- Update all field paths: fundamentals.* → screener.*, quote.* → yahoo.*
+- Yahoo Finance v7 quoteSummary replaces NSE cookie-based API (no cookie needed)
+- Screener.in JSON API replaces HTML scraping (faster, structured)
+- All HTTP calls hard-capped at 4s — Vercel 10s limit safe
+- Fix /api/stock/enrich endpoint to use new pattern
+- Remove deliveryPct (not available from Yahoo Finance)

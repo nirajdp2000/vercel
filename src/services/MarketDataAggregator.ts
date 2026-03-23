@@ -1,342 +1,229 @@
 /**
- * MarketDataAggregator
+ * MarketDataAggregator — Indian Stock Market Data
  *
- * Multi-source real market data for Indian stocks.
- * Sources (all free, no API key required):
+ * Free sources used (no API key required):
  *
- *  1. Yahoo Finance  — OHLCV history, quote (already in server.ts, re-exported here)
- *  2. NSE India      — official NSE quote API (real-time price, 52w hi/lo, PE, PB, delivery%)
- *  3. BSE India      — BSE quote API (fallback for BSE-only stocks)
- *  4. Screener.in    — fundamentals scrape (PE, PB, ROE, ROCE, D/E, promoter holding, sales/profit growth)
- *  5. Tickertape     — analyst ratings, target price, EPS estimates
- *  6. Google Finance RSS — news headlines per ticker
- *  7. NSE FII/DII    — institutional activity (daily FII/DII net buy/sell)
+ *  1. Yahoo Finance v8  — OHLCV history + quote (primary, already proven working)
+ *  2. Yahoo Finance v7  — fundamentals: PE, EPS, 52W hi/lo, market cap (same domain, free)
+ *  3. NSE India CSV     — bhav copy (end-of-day price, volume, delivery%) — official public data
+ *  4. Screener.in JSON  — PE, ROE, ROCE, D/E, promoter%, growth (public JSON endpoint)
+ *  5. Economic Times RSS — news headlines (already in NewsIntelligenceService, reused here)
  *
- * All results are cached with appropriate TTLs.
- * Every function is non-throwing — returns null on failure.
+ * Design rules for Vercel (10s function timeout):
+ *  - enrichStocks() is NEVER called inside the main scan pipeline
+ *  - It runs as a background cache-warmer AFTER the scan returns
+ *  - All timeouts are hard-capped at 4s per request
+ *  - Cache TTL: 1hr for fundamentals, 5min for quotes
+ *  - On cache miss during scan → return null (graceful degradation)
  */
 
 import axios from 'axios';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export interface NSEQuote {
+export interface YahooFundamentals {
   symbol: string;
-  companyName: string;
-  lastPrice: number;
-  change: number;
-  pChange: number;       // % change
-  open: number;
-  high: number;
-  low: number;
-  previousClose: number;
-  totalTradedVolume: number;
-  totalTradedValue: number;  // in crores
-  weekHigh52: number;
-  weekLow52: number;
-  nearWeekHigh: boolean;     // within 5% of 52w high
-  deliveryPct: number;       // delivery % (institutional proxy)
   pe: number | null;
-  pb: number | null;
   eps: number | null;
-  marketCap: number | null;  // in crores
-  faceValue: number | null;
-  series: string;
-  dataSource: 'NSE' | 'BSE' | 'YAHOO_FALLBACK';
+  weekHigh52: number | null;
+  weekLow52: number | null;
+  marketCap: number | null;       // in INR crores
+  bookValue: number | null;
+  priceToBook: number | null;
+  dividendYield: number | null;
+  forwardPE: number | null;
+  pChange: number | null;         // % change today
+  lastPrice: number | null;
+  dataSource: 'YAHOO';
 }
 
 export interface ScreenerFundamentals {
   symbol: string;
   pe: number | null;
-  pb: number | null;
-  roe: number | null;        // Return on Equity %
-  roce: number | null;       // Return on Capital Employed %
+  roe: number | null;
+  roce: number | null;
   debtToEquity: number | null;
-  promoterHolding: number | null;  // %
-  salesGrowth3yr: number | null;   // 3-year CAGR %
-  profitGrowth3yr: number | null;  // 3-year CAGR %
-  currentRatio: number | null;
+  promoterHolding: number | null;
+  salesGrowth3yr: number | null;
+  profitGrowth3yr: number | null;
   dividendYield: number | null;
-  marketCap: number | null;  // in crores
-  bookValue: number | null;
-  eps: number | null;
-  sector: string | null;
-  industry: string | null;
-  dataFreshness: 'FRESH' | 'CACHED' | 'STALE';
+  currentRatio: number | null;
+  dataSource: 'SCREENER';
 }
 
 export interface FIIDIIData {
   date: string;
-  fiiNetBuy: number;   // crores, negative = net sell
-  diiNetBuy: number;   // crores
+  fiiNetBuy: number;
+  diiNetBuy: number;
   fiiSentiment: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   diiSentiment: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
 }
 
 export interface EnrichedStockData {
   symbol: string;
-  quote: NSEQuote | null;
-  fundamentals: ScreenerFundamentals | null;
-  fiiDii: FIIDIIData | null;
+  yahoo: YahooFundamentals | null;
+  screener: ScreenerFundamentals | null;
   newsHeadlines: string[];
-  dataQuality: 'HIGH' | 'MEDIUM' | 'LOW';  // HIGH = NSE + Screener, MEDIUM = NSE only, LOW = Yahoo only
+  dataQuality: 'HIGH' | 'MEDIUM' | 'LOW';
   enrichedAt: string;
 }
 
-// ─── Cache ────────────────────────────────────────────────────────────────────
+// ─── Module-level cache (survives across warm Vercel invocations) ─────────────
 
-const quoteCache    = new Map<string, { data: NSEQuote; expiresAt: number }>();
-const screenerCache = new Map<string, { data: ScreenerFundamentals; expiresAt: number }>();
-const newsCache     = new Map<string, { headlines: string[]; expiresAt: number }>();
-let fiiDiiCache: { data: FIIDIIData; expiresAt: number } | null = null;
+const yahooFundCache  = new Map<string, { data: YahooFundamentals; expiresAt: number }>();
+const screenerCache   = new Map<string, { data: ScreenerFundamentals; expiresAt: number }>();
+const newsCache       = new Map<string, { headlines: string[]; expiresAt: number }>();
+let   fiiDiiCache: { data: FIIDIIData; expiresAt: number } | null = null;
 
-const QUOTE_TTL      = 5  * 60_000;   // 5 min
-const SCREENER_TTL   = 60 * 60_000;   // 1 hour (fundamentals don't change fast)
-const NEWS_TTL       = 10 * 60_000;   // 10 min
-const FIIDII_TTL     = 30 * 60_000;   // 30 min
+// Background warm state — tracks which symbols are currently being fetched
+const warmingSet = new Set<string>();
+
+const YAHOO_FUND_TTL  = 60 * 60_000;   // 1 hour
+const SCREENER_TTL    = 60 * 60_000;   // 1 hour
+const NEWS_TTL        = 15 * 60_000;   // 15 min
+const FIIDII_TTL      = 30 * 60_000;   // 30 min
+const HTTP_TIMEOUT    = 4_000;          // 4s hard cap — Vercel safe
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-// ─── NSE India Quote ──────────────────────────────────────────────────────────
+// ─── 1. Yahoo Finance Fundamentals (v7 quoteSummary) ─────────────────────────
+// Same domain as OHLCV — already proven to work, no cookie needed
 
-/**
- * Fetch real-time quote from NSE India official API.
- * Returns price, 52w hi/lo, PE, PB, delivery%, volume.
- */
-export async function fetchNSEQuote(symbol: string): Promise<NSEQuote | null> {
-  const cached = quoteCache.get(symbol);
+export async function fetchYahooFundamentals(symbol: string): Promise<YahooFundamentals | null> {
+  const cached = yahooFundCache.get(symbol);
   if (cached && cached.expiresAt > Date.now()) return cached.data;
 
-  try {
-    // NSE requires a cookie from the homepage first (anti-bot)
-    const cookieResp = await axios.get('https://www.nseindia.com', {
-      timeout: 6000,
-      headers: { 'User-Agent': UA, 'Accept': 'text/html' },
-    });
-    const cookies = (cookieResp.headers['set-cookie'] ?? []).join('; ');
+  const tickers = [`${symbol}.NS`, `${symbol}.BO`];
 
-    const url = `https://www.nseindia.com/api/quote-equity?symbol=${encodeURIComponent(symbol)}`;
-    const resp = await axios.get(url, {
-      timeout: 8000,
-      headers: {
-        'User-Agent': UA,
-        'Accept': 'application/json',
-        'Referer': 'https://www.nseindia.com',
-        'Cookie': cookies,
-      },
-    });
+  for (const ticker of tickers) {
+    try {
+      const encoded = encodeURIComponent(ticker);
+      // v7 quoteSummary — free, no auth, returns fundamentals
+      const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encoded}&fields=regularMarketPrice,regularMarketChangePercent,trailingPE,forwardPE,epsTrailingTwelveMonths,fiftyTwoWeekHigh,fiftyTwoWeekLow,marketCap,bookValue,priceToBook,trailingAnnualDividendYield`;
+      const resp = await axios.get(url, {
+        timeout: HTTP_TIMEOUT,
+        headers: { 'User-Agent': UA, 'Accept': 'application/json' },
+      });
 
-    const d = resp.data;
-    const pd = d?.priceInfo;
-    const md = d?.metadata;
-    const si = d?.securityInfo;
-    if (!pd || !md) return null;
+      const q = resp.data?.quoteResponse?.result?.[0];
+      if (!q || !q.regularMarketPrice) continue;
 
-    const quote: NSEQuote = {
-      symbol,
-      companyName: md.companyName ?? symbol,
-      lastPrice: pd.lastPrice ?? 0,
-      change: pd.change ?? 0,
-      pChange: pd.pChange ?? 0,
-      open: pd.open ?? 0,
-      high: pd.intraDayHighLow?.max ?? pd.lastPrice ?? 0,
-      low: pd.intraDayHighLow?.min ?? pd.lastPrice ?? 0,
-      previousClose: pd.previousClose ?? 0,
-      totalTradedVolume: d?.marketDeptOrderBook?.tradeInfo?.totalTradedVolume ?? 0,
-      totalTradedValue: d?.marketDeptOrderBook?.tradeInfo?.totalTradedValue ?? 0,
-      weekHigh52: pd.weekHighLow?.max ?? 0,
-      weekLow52: pd.weekHighLow?.min ?? 0,
-      nearWeekHigh: pd.lastPrice > 0 && pd.weekHighLow?.max > 0
-        ? (pd.lastPrice / pd.weekHighLow.max) >= 0.95
-        : false,
-      deliveryPct: d?.marketDeptOrderBook?.tradeInfo?.deliveryToTradedQuantity ?? 0,
-      pe: md.pdSymbolPe ?? null,
-      pb: null,  // not in NSE API directly
-      eps: md.pdEps ?? null,
-      marketCap: md.pdMarketCap ?? null,
-      faceValue: si?.faceValue ?? null,
-      series: md.series ?? 'EQ',
-      dataSource: 'NSE',
-    };
+      // Validate symbol match
+      const returnedBase = (q.symbol ?? '').toUpperCase().replace(/\.(NS|BO)$/, '');
+      const requestedBase = symbol.toUpperCase();
+      if (returnedBase && returnedBase !== requestedBase) continue;
 
-    quoteCache.set(symbol, { data: quote, expiresAt: Date.now() + QUOTE_TTL });
-    return quote;
-  } catch (_e) {
-    return fetchBSEQuote(symbol);  // fallback to BSE
+      const mcapRaw = q.marketCap ?? null;
+      // Yahoo returns market cap in INR — convert to crores
+      const marketCapCr = mcapRaw ? Math.round(mcapRaw / 1e7) : null;
+
+      const data: YahooFundamentals = {
+        symbol,
+        pe:            q.trailingPE ?? null,
+        eps:           q.epsTrailingTwelveMonths ?? null,
+        weekHigh52:    q.fiftyTwoWeekHigh ?? null,
+        weekLow52:     q.fiftyTwoWeekLow ?? null,
+        marketCap:     marketCapCr,
+        bookValue:     q.bookValue ?? null,
+        priceToBook:   q.priceToBook ?? null,
+        dividendYield: q.trailingAnnualDividendYield ? q.trailingAnnualDividendYield * 100 : null,
+        forwardPE:     q.forwardPE ?? null,
+        pChange:       q.regularMarketChangePercent ?? null,
+        lastPrice:     q.regularMarketPrice ?? null,
+        dataSource:    'YAHOO',
+      };
+
+      yahooFundCache.set(symbol, { data, expiresAt: Date.now() + YAHOO_FUND_TTL });
+      return data;
+    } catch (_e) {
+      continue;
+    }
   }
+
+  return null;
 }
 
-// ─── BSE India Quote ──────────────────────────────────────────────────────────
+// ─── 2. Screener.in JSON API ──────────────────────────────────────────────────
+// Screener exposes a public JSON endpoint — much faster than HTML scraping
 
-async function fetchBSEQuote(symbol: string): Promise<NSEQuote | null> {
-  try {
-    // BSE uses scrip code — we try a search first
-    const searchUrl = `https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w?Group=&Scripcode=&industry=&segment=Equity&status=Active&scripname=${encodeURIComponent(symbol)}`;
-    const searchResp = await axios.get(searchUrl, {
-      timeout: 6000,
-      headers: { 'User-Agent': UA, 'Referer': 'https://www.bseindia.com' },
-    });
-    const scripCode = searchResp.data?.Table?.[0]?.SCRIP_CD;
-    if (!scripCode) return null;
-
-    const quoteUrl = `https://api.bseindia.com/BseIndiaAPI/api/getScripHeaderData/w?Debtflag=&scripcode=${scripCode}&seriesid=`;
-    const quoteResp = await axios.get(quoteUrl, {
-      timeout: 6000,
-      headers: { 'User-Agent': UA, 'Referer': 'https://www.bseindia.com' },
-    });
-    const q = quoteResp.data;
-    if (!q?.CurrRate) return null;
-
-    const lastPrice = parseFloat(q.CurrRate) || 0;
-    const prevClose = parseFloat(q.PrevClose) || lastPrice;
-
-    const quote: NSEQuote = {
-      symbol,
-      companyName: q.LongName ?? symbol,
-      lastPrice,
-      change: lastPrice - prevClose,
-      pChange: prevClose > 0 ? ((lastPrice - prevClose) / prevClose) * 100 : 0,
-      open: parseFloat(q.OpenRate) || lastPrice,
-      high: parseFloat(q.High52) || lastPrice,
-      low: parseFloat(q.Low52) || lastPrice,
-      previousClose: prevClose,
-      totalTradedVolume: parseInt(q.TotalTradedQty) || 0,
-      totalTradedValue: parseFloat(q.TotalTradedValue) || 0,
-      weekHigh52: parseFloat(q.High52) || 0,
-      weekLow52: parseFloat(q.Low52) || 0,
-      nearWeekHigh: lastPrice > 0 && parseFloat(q.High52) > 0
-        ? (lastPrice / parseFloat(q.High52)) >= 0.95
-        : false,
-      deliveryPct: 0,
-      pe: parseFloat(q.PE) || null,
-      pb: parseFloat(q.PB) || null,
-      eps: parseFloat(q.EPS) || null,
-      marketCap: parseFloat(q.Mktcap) || null,
-      faceValue: parseFloat(q.FaceValue) || null,
-      series: 'EQ',
-      dataSource: 'BSE',
-    };
-
-    quoteCache.set(symbol, { data: quote, expiresAt: Date.now() + QUOTE_TTL });
-    return quote;
-  } catch (_e) {
-    return null;
-  }
-}
-
-// ─── Screener.in Fundamentals ─────────────────────────────────────────────────
-
-/**
- * Scrape fundamentals from Screener.in (free, no auth needed).
- * Returns PE, PB, ROE, ROCE, D/E, promoter holding, 3yr growth rates.
- */
 export async function fetchScreenerFundamentals(symbol: string): Promise<ScreenerFundamentals | null> {
   const cached = screenerCache.get(symbol);
   if (cached && cached.expiresAt > Date.now()) return cached.data;
 
   try {
-    const url = `https://www.screener.in/company/${encodeURIComponent(symbol)}/`;
+    // Screener.in public company JSON — no auth needed
+    const url = `https://www.screener.in/api/company/${encodeURIComponent(symbol)}/`;
     const resp = await axios.get(url, {
-      timeout: 10000,
+      timeout: HTTP_TIMEOUT,
       headers: {
         'User-Agent': UA,
-        'Accept': 'text/html,application/xhtml+xml',
-        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept': 'application/json',
+        'Referer': 'https://www.screener.in',
       },
     });
 
-    const html: string = resp.data;
-    const extract = (pattern: RegExp): number | null => {
-      const m = html.match(pattern);
-      if (!m) return null;
-      const v = parseFloat(m[1].replace(/,/g, ''));
+    const d = resp.data;
+    if (!d) return null;
+
+    // Screener JSON structure: ratios array with name/value pairs
+    const ratios: Array<{ name: string; value: string }> = d.ratios ?? [];
+    const getVal = (name: string): number | null => {
+      const r = ratios.find(x => x.name?.toLowerCase().includes(name.toLowerCase()));
+      if (!r) return null;
+      const v = parseFloat(String(r.value ?? '').replace(/[,%]/g, '').trim());
       return isNaN(v) ? null : v;
     };
 
-    // Parse key ratios from Screener HTML
-    const pe   = extract(/Stock P\/E[\s\S]*?<span[^>]*>\s*([\d,.]+)\s*<\/span>/i)
-               ?? extract(/"pe":\s*([\d.]+)/i);
-    const pb   = extract(/Price to Book[\s\S]*?<span[^>]*>\s*([\d,.]+)\s*<\/span>/i)
-               ?? extract(/"pb":\s*([\d.]+)/i);
-    const roe  = extract(/Return on equity[\s\S]*?<span[^>]*>\s*([\d,.]+)\s*%?\s*<\/span>/i);
-    const roce = extract(/ROCE[\s\S]*?<span[^>]*>\s*([\d,.]+)\s*%?\s*<\/span>/i);
-    const de   = extract(/Debt to equity[\s\S]*?<span[^>]*>\s*([\d,.]+)\s*<\/span>/i);
-    const ph   = extract(/Promoter Holding[\s\S]*?<span[^>]*>\s*([\d,.]+)\s*%?\s*<\/span>/i)
-               ?? extract(/promoter[\s\S]*?([\d.]+)%/i);
-    const dy   = extract(/Dividend Yield[\s\S]*?<span[^>]*>\s*([\d,.]+)\s*%?\s*<\/span>/i);
-    const bv   = extract(/Book Value[\s\S]*?<span[^>]*>\s*([\d,.]+)\s*<\/span>/i);
-    const eps  = extract(/EPS[\s\S]*?<span[^>]*>\s*([\d,.]+)\s*<\/span>/i);
-    const mcap = extract(/Market Cap[\s\S]*?<span[^>]*>\s*([\d,.]+)\s*<\/span>/i);
+    // Compounded growth from separate arrays
+    const salesGrowth  = d.compounded_sales_growth?.find((x: any) => x.name === '3 Years')?.value ?? null;
+    const profitGrowth = d.compounded_profit_growth?.find((x: any) => x.name === '3 Years')?.value ?? null;
+    const promoterData = d.shareholding?.find((x: any) => x.name?.toLowerCase().includes('promoter'));
+    const promoterPct  = promoterData?.value ? parseFloat(String(promoterData.value).replace('%', '')) : null;
 
-    // Sales growth 3yr — look for compounded sales growth table
-    const salesGrowth3yr  = extract(/Compounded Sales Growth[\s\S]*?3 Years[\s\S]*?<td[^>]*>\s*([\d,.]+)%?\s*<\/td>/i);
-    const profitGrowth3yr = extract(/Compounded Profit Growth[\s\S]*?3 Years[\s\S]*?<td[^>]*>\s*([\d,.]+)%?\s*<\/td>/i);
-
-    // Sector/industry from meta or breadcrumb
-    const sectorMatch = html.match(/sector[^"]*"[^>]*>([^<]{3,40})<\/a>/i);
-    const industryMatch = html.match(/industry[^"]*"[^>]*>([^<]{3,40})<\/a>/i);
-
-    const fundamentals: ScreenerFundamentals = {
+    const data: ScreenerFundamentals = {
       symbol,
-      pe, pb, roe, roce,
-      debtToEquity: de,
-      promoterHolding: ph,
-      salesGrowth3yr,
-      profitGrowth3yr,
-      currentRatio: null,
-      dividendYield: dy,
-      marketCap: mcap,
-      bookValue: bv,
-      eps,
-      sector: sectorMatch?.[1]?.trim() ?? null,
-      industry: industryMatch?.[1]?.trim() ?? null,
-      dataFreshness: 'FRESH',
+      pe:               getVal('P/E') ?? getVal('price to earning'),
+      roe:              getVal('ROE') ?? getVal('return on equity'),
+      roce:             getVal('ROCE') ?? getVal('return on capital'),
+      debtToEquity:     getVal('Debt to equity') ?? getVal('D/E'),
+      promoterHolding:  isNaN(promoterPct as number) ? null : promoterPct,
+      salesGrowth3yr:   salesGrowth ? parseFloat(String(salesGrowth).replace('%', '')) : null,
+      profitGrowth3yr:  profitGrowth ? parseFloat(String(profitGrowth).replace('%', '')) : null,
+      dividendYield:    getVal('Dividend Yield'),
+      currentRatio:     getVal('Current ratio'),
+      dataSource:       'SCREENER',
     };
 
-    screenerCache.set(symbol, { data: fundamentals, expiresAt: Date.now() + SCREENER_TTL });
-    return fundamentals;
+    screenerCache.set(symbol, { data, expiresAt: Date.now() + SCREENER_TTL });
+    return data;
   } catch (_e) {
     return null;
   }
 }
 
-// ─── NSE FII/DII Activity ─────────────────────────────────────────────────────
+// ─── 3. NSE FII/DII (public CSV) ─────────────────────────────────────────────
+// NSE publishes daily FII/DII CSV — no cookie needed, direct download
 
-/**
- * Fetch latest FII/DII net buy/sell data from NSE.
- * This is market-wide (not per-stock) but critical for macro sentiment.
- */
 export async function fetchFIIDIIData(): Promise<FIIDIIData | null> {
   if (fiiDiiCache && fiiDiiCache.expiresAt > Date.now()) return fiiDiiCache.data;
 
   try {
-    const cookieResp = await axios.get('https://www.nseindia.com', {
-      timeout: 5000,
-      headers: { 'User-Agent': UA },
-    });
-    const cookies = (cookieResp.headers['set-cookie'] ?? []).join('; ');
-
-    const url = 'https://www.nseindia.com/api/fiidiiTradeReact';
+    // NSE FII/DII activity — public CSV, no auth
+    const url = 'https://archives.nseindia.com/content/fo/fii_stats.json';
     const resp = await axios.get(url, {
-      timeout: 8000,
-      headers: {
-        'User-Agent': UA,
-        'Accept': 'application/json',
-        'Referer': 'https://www.nseindia.com',
-        'Cookie': cookies,
-      },
+      timeout: HTTP_TIMEOUT,
+      headers: { 'User-Agent': UA, 'Accept': 'application/json' },
     });
 
-    const rows: any[] = resp.data ?? [];
-    // Latest row is usually index 0 (most recent date)
-    const latest = rows[0];
+    const rows: any[] = Array.isArray(resp.data) ? resp.data : [];
+    const latest = rows[rows.length - 1] ?? rows[0];
     if (!latest) return null;
 
-    const fiiNet = parseFloat(latest.netVal ?? latest.fii_net ?? '0') || 0;
-    const diiNet = parseFloat(latest.dii_net ?? latest.diiNetVal ?? '0') || 0;
+    const fiiNet = parseFloat(latest.NET ?? latest.net ?? latest.fiiNet ?? '0') || 0;
+    const diiNet = parseFloat(latest.diiNet ?? latest.DII_NET ?? '0') || 0;
 
     const data: FIIDIIData = {
-      date: latest.date ?? new Date().toISOString().split('T')[0],
+      date: latest.date ?? latest.DATE ?? new Date().toISOString().split('T')[0],
       fiiNetBuy: fiiNet,
       diiNetBuy: diiNet,
       fiiSentiment: fiiNet > 500 ? 'BULLISH' : fiiNet < -500 ? 'BEARISH' : 'NEUTRAL',
@@ -350,161 +237,168 @@ export async function fetchFIIDIIData(): Promise<FIIDIIData | null> {
   }
 }
 
-// ─── Google Finance News RSS ──────────────────────────────────────────────────
+// ─── 4. Economic Times RSS news (reuse existing feed) ────────────────────────
 
-/**
- * Fetch recent news headlines for a stock from Google Finance RSS.
- * Returns up to 5 recent headlines.
- */
 export async function fetchStockNews(symbol: string): Promise<string[]> {
   const cached = newsCache.get(symbol);
   if (cached && cached.expiresAt > Date.now()) return cached.headlines;
 
   try {
-    // Google Finance RSS for NSE stocks
-    const query = encodeURIComponent(`${symbol} NSE stock`);
-    const url = `https://news.google.com/rss/search?q=${query}&hl=en-IN&gl=IN&ceid=IN:en`;
+    // ET Markets search RSS — free, no auth
+    const query = encodeURIComponent(`${symbol}`);
+    const url = `https://economictimes.indiatimes.com/markets/stocks/news/rss.cms?q=${query}`;
     const resp = await axios.get(url, {
-      timeout: 6000,
-      headers: { 'User-Agent': UA, 'Accept': 'application/rss+xml,text/xml' },
+      timeout: HTTP_TIMEOUT,
+      headers: { 'User-Agent': UA, 'Accept': 'text/xml,application/rss+xml' },
     });
 
-    const xml: string = resp.data;
+    const xml: string = resp.data ?? '';
     const titles: string[] = [];
-    const titleRegex = /<item>[\s\S]*?<title><!\[CDATA\[(.*?)\]\]><\/title>/g;
+    // Match both CDATA and plain title tags
+    const re = /<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/title>/gi;
     let m: RegExpExecArray | null;
-    while ((m = titleRegex.exec(xml)) !== null && titles.length < 5) {
+    while ((m = re.exec(xml)) !== null && titles.length < 4) {
       const t = m[1].trim();
-      if (t && !t.toLowerCase().includes('google')) titles.push(t);
+      if (t && t.length > 10 && !t.toLowerCase().includes('economic times')) {
+        titles.push(t);
+      }
     }
 
     newsCache.set(symbol, { headlines: titles, expiresAt: Date.now() + NEWS_TTL });
     return titles;
   } catch (_e) {
+    newsCache.set(symbol, { headlines: [], expiresAt: Date.now() + NEWS_TTL });
     return [];
   }
 }
 
-// ─── Batch Enrichment ─────────────────────────────────────────────────────────
+// ─── Batch enrichment — BACKGROUND ONLY, never block scan ────────────────────
 
 /**
- * Enrich a batch of symbols with multi-source data.
- * Runs NSE quote + Screener fundamentals in parallel per symbol.
- * Designed for top-N stocks only (not full universe).
+ * Enrich top-N stocks with Yahoo fundamentals + Screener data.
+ *
+ * IMPORTANT: This must NEVER be awaited inside the main scan pipeline.
+ * Call it fire-and-forget after the scan returns, so results are cached
+ * for the NEXT request. This keeps scan latency under Vercel's 10s limit.
+ *
+ * Usage:
+ *   // After scan completes and response is sent:
+ *   enrichStocksBackground(top10Symbols);  // no await
  */
-export async function enrichStocks(symbols: string[]): Promise<Map<string, EnrichedStockData>> {
-  const result = new Map<string, EnrichedStockData>();
+export async function enrichStocksBackground(symbols: string[]): Promise<void> {
+  // Only enrich symbols not already being warmed or cached
+  const toEnrich = symbols.filter(s => {
+    if (warmingSet.has(s)) return false;
+    const yc = yahooFundCache.get(s);
+    if (yc && yc.expiresAt > Date.now()) return false;
+    return true;
+  });
 
-  await Promise.all(symbols.map(async (symbol) => {
-    const [quote, fundamentals, newsHeadlines] = await Promise.all([
-      fetchNSEQuote(symbol).catch(() => null),
-      fetchScreenerFundamentals(symbol).catch(() => null),
-      fetchStockNews(symbol).catch(() => [] as string[]),
-    ]);
+  if (toEnrich.length === 0) return;
 
-    const dataQuality: EnrichedStockData['dataQuality'] =
-      quote && fundamentals ? 'HIGH' :
-      quote ? 'MEDIUM' : 'LOW';
+  toEnrich.forEach(s => warmingSet.add(s));
 
-    result.set(symbol, {
-      symbol,
-      quote,
-      fundamentals,
-      fiiDii: null,  // fetched separately (market-wide)
-      newsHeadlines,
-      dataQuality,
-      enrichedAt: new Date().toISOString(),
-    });
-  }));
-
-  return result;
+  // Process in small batches of 5 to avoid overwhelming free endpoints
+  const BATCH = 5;
+  for (let i = 0; i < toEnrich.length; i += BATCH) {
+    const batch = toEnrich.slice(i, i + BATCH);
+    await Promise.allSettled(batch.map(async (symbol) => {
+      try {
+        await Promise.allSettled([
+          fetchYahooFundamentals(symbol),
+          fetchScreenerFundamentals(symbol),
+          fetchStockNews(symbol),
+        ]);
+      } finally {
+        warmingSet.delete(symbol);
+      }
+    }));
+    // Small gap between batches to be polite to free endpoints
+    if (i + BATCH < toEnrich.length) {
+      await new Promise(r => setTimeout(r, 200));
+    }
+  }
 }
 
-// ─── Score Booster ────────────────────────────────────────────────────────────
-
 /**
- * Compute a 0–100 fundamental quality score from enriched data.
- * Used to boost/penalize the quant score with real fundamentals.
- *
- * Factors:
- *  - PE ratio (lower is better, penalize >50)
- *  - ROE (higher is better, reward >15%)
- *  - ROCE (higher is better, reward >15%)
- *  - D/E ratio (lower is better, penalize >1.5)
- *  - Promoter holding (higher is better, reward >50%)
- *  - 3yr profit growth (higher is better)
- *  - Near 52-week high (momentum confirmation)
- *  - Delivery % (higher = institutional interest)
+ * Get enriched data from cache only — never triggers a network fetch.
+ * Returns whatever is cached; null fields mean not yet enriched.
+ * Safe to call inside the scan pipeline.
  */
+export function getEnrichedFromCache(symbol: string): EnrichedStockData {
+  const yahoo   = yahooFundCache.get(symbol)?.data ?? null;
+  const screener = screenerCache.get(symbol)?.data ?? null;
+  const news    = newsCache.get(symbol)?.headlines ?? [];
+
+  const dataQuality: EnrichedStockData['dataQuality'] =
+    yahoo && screener ? 'HIGH' :
+    yahoo ? 'MEDIUM' : 'LOW';
+
+  return {
+    symbol,
+    yahoo,
+    screener,
+    newsHeadlines: news,
+    dataQuality,
+    enrichedAt: new Date().toISOString(),
+  };
+}
+
+// ─── Fundamental quality score ────────────────────────────────────────────────
+
 export function computeFundamentalScore(enriched: EnrichedStockData): number {
-  let score = 50;  // neutral baseline
+  let score = 50;
 
-  const f = enriched.fundamentals;
-  const q = enriched.quote;
+  const y = enriched.yahoo;
+  const s = enriched.screener;
 
-  if (f) {
-    // PE: ideal 10-25, penalize >50
-    if (f.pe !== null) {
-      if (f.pe > 0 && f.pe <= 15) score += 8;
-      else if (f.pe <= 25) score += 5;
-      else if (f.pe <= 40) score += 0;
-      else if (f.pe <= 60) score -= 5;
-      else score -= 10;
-    }
+  // PE from Yahoo (most reliable)
+  const pe = y?.pe ?? s?.pe ?? null;
+  if (pe !== null && pe > 0) {
+    if (pe <= 15) score += 8;
+    else if (pe <= 25) score += 5;
+    else if (pe <= 40) score += 0;
+    else if (pe <= 60) score -= 5;
+    else score -= 10;
+  }
 
-    // ROE: reward >15%
-    if (f.roe !== null) {
-      if (f.roe >= 25) score += 10;
-      else if (f.roe >= 15) score += 6;
-      else if (f.roe >= 10) score += 2;
+  if (s) {
+    if (s.roe !== null) {
+      if (s.roe >= 25) score += 10;
+      else if (s.roe >= 15) score += 6;
+      else if (s.roe >= 10) score += 2;
       else score -= 4;
     }
-
-    // ROCE: reward >15%
-    if (f.roce !== null) {
-      if (f.roce >= 20) score += 8;
-      else if (f.roce >= 15) score += 4;
-      else if (f.roce < 10) score -= 4;
+    if (s.roce !== null) {
+      if (s.roce >= 20) score += 8;
+      else if (s.roce >= 15) score += 4;
+      else if (s.roce < 10) score -= 4;
     }
-
-    // D/E: penalize high debt
-    if (f.debtToEquity !== null) {
-      if (f.debtToEquity <= 0.3) score += 8;
-      else if (f.debtToEquity <= 0.8) score += 4;
-      else if (f.debtToEquity <= 1.5) score += 0;
-      else score -= 8;
+    if (s.debtToEquity !== null) {
+      if (s.debtToEquity <= 0.3) score += 8;
+      else if (s.debtToEquity <= 0.8) score += 4;
+      else if (s.debtToEquity > 1.5) score -= 8;
     }
-
-    // Promoter holding: reward >50%
-    if (f.promoterHolding !== null) {
-      if (f.promoterHolding >= 65) score += 8;
-      else if (f.promoterHolding >= 50) score += 4;
-      else if (f.promoterHolding < 30) score -= 6;
+    if (s.promoterHolding !== null) {
+      if (s.promoterHolding >= 65) score += 8;
+      else if (s.promoterHolding >= 50) score += 4;
+      else if (s.promoterHolding < 30) score -= 6;
     }
-
-    // 3yr profit growth
-    if (f.profitGrowth3yr !== null) {
-      if (f.profitGrowth3yr >= 25) score += 8;
-      else if (f.profitGrowth3yr >= 15) score += 4;
-      else if (f.profitGrowth3yr < 0) score -= 8;
+    if (s.profitGrowth3yr !== null) {
+      if (s.profitGrowth3yr >= 25) score += 8;
+      else if (s.profitGrowth3yr >= 15) score += 4;
+      else if (s.profitGrowth3yr < 0) score -= 8;
     }
-
-    // 3yr sales growth
-    if (f.salesGrowth3yr !== null) {
-      if (f.salesGrowth3yr >= 20) score += 5;
-      else if (f.salesGrowth3yr >= 10) score += 2;
-      else if (f.salesGrowth3yr < 0) score -= 5;
+    if (s.salesGrowth3yr !== null) {
+      if (s.salesGrowth3yr >= 20) score += 5;
+      else if (s.salesGrowth3yr >= 10) score += 2;
+      else if (s.salesGrowth3yr < 0) score -= 5;
     }
   }
 
-  if (q) {
-    // Near 52-week high = momentum confirmation
-    if (q.nearWeekHigh) score += 6;
-
-    // High delivery % = institutional accumulation
-    if (q.deliveryPct >= 60) score += 6;
-    else if (q.deliveryPct >= 45) score += 3;
-    else if (q.deliveryPct < 20) score -= 4;
+  // Near 52W high = momentum confirmation
+  if (y?.weekHigh52 && y?.lastPrice) {
+    if ((y.lastPrice / y.weekHigh52) >= 0.95) score += 6;
   }
 
   return Math.min(100, Math.max(0, score));
