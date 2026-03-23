@@ -1,10 +1,11 @@
-fix: replace all bare catch{} with catch(_e){} for esbuild/Vercel compatibility
+fix: remove orphaned code fragment causing esbuild parse error
 
-esbuild on Vercel (node20 target) does not support optional catch binding (catch without
-a variable). Replaced all instances of `} catch {` with `} catch (_e) {` throughout
-server.ts to fix the build error:
+The previous PowerShell regex replacement left a dangling code block
+(the body of fetchYahooQuote) floating outside any function after
+fetchRealPricesForSymbols. This caused esbuild to fail with
+"Unexpected catch" at line 4229 because the orphaned try/catch block
+was at the top level of the module scope.
 
-  server.ts:4229:6: ERROR: Unexpected "catch"
-
-Affected locations: fetchYahooQuote (x2), SSE stream heartbeat, hedgeFundData parse,
-index data fallback, real price overlay, skip blocks, and all Supabase query catch blocks.
+Removed the 14 orphaned lines. server.ts now has exactly one
+fetchYahooQuote, one fetchRealPricesForSymbols, and buildLiveMacroSnapshot
+follows immediately after with no stray code between them.

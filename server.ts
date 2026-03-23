@@ -3979,7 +3979,7 @@ Respond ONLY with this JSON structure (fill every field):
     try {
       const top50Symbols = top50.map((r: any) => r.symbol);
       realPrices = await fetchRealPricesForSymbols(top50Symbols);
-    } catch (_e) { /* non-blocking — fall back to synthetic prices */ }
+    } catch (_e) { /* non-blocking ï¿½ fall back to synthetic prices */ }
 
     const top50WithRealPrices = top50.map((r: any) => {
       const live = realPrices.get(r.symbol);
@@ -4213,22 +4213,6 @@ Respond ONLY with this JSON structure (fill every field):
     realPriceCache = { expiresAt: now + ttl, prices };
     logAction('real-prices.fetched', { count: prices.size, total: symbols.length });
     return prices;
-  };
-      const encoded = encodeURIComponent(symbol);
-      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?interval=1d&range=1d`;
-      const resp = await axios.get(url, {
-        timeout: 8000,
-        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
-      });
-      const meta = resp.data?.chart?.result?.[0]?.meta;
-      if (!meta) return null;
-      return {
-        price: meta.regularMarketPrice ?? meta.chartPreviousClose ?? 0,
-        changePct: meta.regularMarketChangePercent ?? 0,
-      };
-    } catch (_e) {
-      return null;
-    }
   };
 
   const buildLiveMacroSnapshot = async (): Promise<any> => {
