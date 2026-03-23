@@ -1,9 +1,6 @@
-perf: drastically reduce CPU usage on both scan tabs
+perf: prioritize real-data symbols in scan pre-sort
 
-- UltraQuant cache TTL: 60s → 5min
-- Multibagger cache TTLs: 30-180s → 3-10min
-- Remove 10s fallback TTL (was causing recompute every 10s with no Supabase data)
-- Skip Supabase OHLCV read when >80% of symbols already in memory cache
-- Skip Supabase fundamentals read when >80% already warm
-- Memoize createUltraQuantUniverse() — avoid rebuilding large array on every scan
-- Clear memo on universe refresh from Supabase
+- Pass 1 pre-sort now gives +30 bonus to symbols with real OHLCV in cache
+- Ensures cached large-caps (RELIANCE, TCS, etc.) always rank in top 100
+- Prevents random small-caps from displacing real-data stocks
+- Applied to both UltraQuant and Multibagger scan pipelines

@@ -1621,7 +1621,9 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
       // Deterministic score: mix of symbol hash + sector + marketCap tier
       const capTier = profile.marketCap > 100000 ? 10 : profile.marketCap > 20000 ? 7 : profile.marketCap > 5000 ? 4 : 1;
       const hashScore = ((seed * 2654435761) >>> 0) / 4294967296 * 60; // 0-60
-      const score = hashScore + sectorBonus + capTier + (request.historicalPeriodYears * 0.5);
+      // Strong bonus for symbols with real OHLCV cached — ensures they always rank in top 100
+      const hasRealData = getOHLCVFromCache(profile.symbol) !== null ? 30 : 0;
+      const score = hashScore + sectorBonus + capTier + hasRealData + (request.historicalPeriodYears * 0.5);
       return { symbol: profile.symbol, score };
     }).sort((a, b) => b.score - a.score);
 
@@ -4025,7 +4027,9 @@ Respond ONLY with this JSON structure (fill every field):
         Industrials: 4, Energy: 3, Telecom: 2, Materials: 2 } as Record<string, number>)[p.sector] ?? 3;
       const capTier = p.marketCap > 100000 ? 10 : p.marketCap > 20000 ? 7 : p.marketCap > 5000 ? 4 : 1;
       const hashScore = ((seed * 2654435761) >>> 0) / 4294967296 * 60;
-      return { symbol: p.symbol, score: hashScore + sectorBonus + capTier };
+      // Strong bonus for symbols with real OHLCV cached — ensures they always rank in top 100
+      const hasRealData = getOHLCVFromCache(p.symbol) !== null ? 30 : 0;
+      return { symbol: p.symbol, score: hashScore + sectorBonus + capTier + hasRealData };
     }).sort((a, b) => b.score - a.score);
 
     const top100MBSet = new Set(preScored.slice(0, 100).map(x => x.symbol));
