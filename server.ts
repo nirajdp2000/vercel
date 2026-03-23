@@ -1222,7 +1222,8 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
 
   const buildHedgeFundSignalDashboard = (
     analyzedUniverse: Array<any>,
-    request: ReturnType<typeof normalizeUltraQuantRequest>
+    request: ReturnType<typeof normalizeUltraQuantRequest>,
+    totalScanned: number
   ): HedgeFundSignalDashboard => {
     const filtered = analyzedUniverse.filter((item) => {
       const sectorMatches = request.sectorFilter === "ALL" || !request.sectorFilter || item.sector === request.sectorFilter;
@@ -1239,7 +1240,7 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
         sectorStrength: [],
         momentumHeatmap: [],
         summary: {
-          scannedUniverse: analyzedUniverse.length,
+          scannedUniverse: totalScanned,
           returned: 0,
           averageFinalScore: 0,
           leadingSector: "N/A",
@@ -1343,7 +1344,7 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
       sectorStrength,
       momentumHeatmap,
       summary: {
-        scannedUniverse: analyzedUniverse.length,
+        scannedUniverse: totalScanned,
         returned: rankings.length,
         averageFinalScore: Number(average(rankings.map((signal) => signal.finalScore)).toFixed(2)),
         leadingSector: sectorStrength[0]?.sector ?? "N/A",
@@ -1529,7 +1530,7 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
       results,
       alerts,
       sectors,
-      hedgeFundSignals: buildHedgeFundSignalDashboard(analyzedUniverse, request),
+      hedgeFundSignals: buildHedgeFundSignalDashboard(analyzedUniverse, request, totalLoaded),
       summary,
       architecture: ultraArchitecture
     };

@@ -1,11 +1,5 @@
-fix: load 5221-stock universe via global bridge (CJS scope fix)
+fix: multi-factor institutional ranking shows 5221 scanned (not 100)
 
-- startServerlessApp pre-loads Supabase universe into global.__supabaseUniverse
-  using getUniverseAsync (top-level import, accessible across CJS bundle scope)
-- createUltraQuantUniverse reads global.__supabaseUniverse on first call,
-  applies curated metadata, clears caches, sets globalApplied flag
-- Fixes ReferenceError: getUniverseSync/loadSupabaseUniverse not defined
-  (esbuild CJS bundle places those consts inside buildApp() closure)
-- Both UltraQuant and Multibagger tabs now show 5221 stocks (was 434)
-- scannedUniverse in multibagger response now uses fullUniverse.length (5221)
-- startServerlessApp completes in ~1.5s locally, all scans <200ms
+buildHedgeFundSignalDashboard now accepts totalScanned param (full universe size)
+instead of using analyzedUniverse.length (which was always 100 — the top-100 subset
+passed for full analysis). scannedUniverse in summary now correctly reflects 5221.
