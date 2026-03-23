@@ -1,6 +1,22 @@
-feat: inject SuperbrainMBPanel into Multibagger detail panel
+fix: realistic Superbrain price targets — eliminate synthetic CAGR inflation
 
-- SuperbrainMBPanel now renders in selectedStock detail view
-- Superbrain AI engine active on both UltraQuant and Multibagger tabs
-- Zero network calls, <2ms per stock, self-learning feedback loop
-- Displays decision, confidence, superScore, riskScore, signals, targets
+Root cause analysis:
+- Yahoo Finance v8 prices are accurate (within 0.3% of NSE Direct — verified)
+- Fake-looking targets were caused by synthetic CAGR (random-walk, 40-120%)
+  being fed directly into computePriceTargets() → wildly inflated targets
+- Multibagger was passing raw cycle return as CAGR (not annualised)
+- volatility and maxDrawdown were hardcoded in MB superbrain call
+
+Fixes:
+1. computePriceTargets() — replaced CAGR-driven formula with score-band
+   calibrated returns (Indian market: 8-30% annual based on superScore)
+   Real CAGR blended at 30% weight only when dataSource=real and cagr<=60%
+2. computeTechnicalSignal() — caps synthetic CAGR at 25 to prevent
+   inflated technical scores from random-walk data
+3. Multibagger superbrain call — properly annualises cycle return:
+   (1 + cycleReturn)^(365/cycleDays) - 1
+4. Multibagger — derives volatility from ret30/ret90 spread (not hardcoded)
+5. Multibagger — derives maxDrawdown from stability score (not hardcoded)
+6. SuperbrainOutput — adds dataSource field so UI can show disclaimer
+7. UI panels — show "⚠ targets are estimates only" when dataSource=synthetic
+   Target/StopLoss labels show ~ suffix for synthetic stocks

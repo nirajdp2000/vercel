@@ -3913,17 +3913,22 @@ Respond ONLY with this JSON structure (fill every field):
         sentimentTag,
         superbrain: runSuperbrain({
           symbol: profile.symbol, sector: profile.sector, marketCap: profile.marketCap,
-          cagr: cycleReturns[i] * 100,
+          // Annualise the cycle return properly: (1 + cycleReturn)^(365/cycleDays) - 1
+          cagr: cycleReturns[i] > -1
+            ? (Math.pow(1 + cycleReturns[i], 365 / cycleDays) - 1) * 100
+            : -50,
           momentum: momentumResults[i].ret90 != null ? 1 + momentumResults[i].ret90 : 1,
           trendStrength: trend,
-          volatility: 0.02, // MB doesn't compute volatility directly — use conservative estimate
-          maxDrawdown: 20,  // conservative estimate for MB
+          // Derive volatility from ret30/ret90 spread (proxy for daily std-dev)
+          volatility: Math.abs((momentumResults[i].ret90 - momentumResults[i].ret30) / Math.sqrt(60)) || 0.018,
+          // Derive max drawdown from stability score (higher stability = lower drawdown)
+          maxDrawdown: Math.max(5, (100 - stability) * 0.45),
           breakoutFrequency: breakout / 100,
           volumeGrowth: volumeResults[i].volRatio,
           gradientBoostProb: bullishScore,
           finalPredictionScore: bullishScore,
           rlAction: bullishScore >= 70 ? 'BUY' : bullishScore <= 35 ? 'SELL' : 'HOLD',
-          orderImbalance: 1.2,
+          orderImbalance: volumeResults[i].volRatio > 1.5 ? 2.0 : 1.2,
           pe: enriched?.yahoo?.pe ?? enriched?.screener?.pe ?? null,
           roe: enriched?.screener?.roe ?? null,
           roce: enriched?.screener?.roce ?? null,

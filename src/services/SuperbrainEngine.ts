@@ -85,6 +85,7 @@ export interface SuperbrainOutput {
   holdingPeriod: string;    // e.g. "3-6 months"
   catalysts: string[];      // top 2 bullish catalysts
   risks: string[];          // top 2 risk factors
+  dataSource: 'real' | 'synthetic'; // whether price/CAGR data is real or simulated
 }
 
 // ── Feedback loop store (self-learning) ───────────────────────────────────────
@@ -135,11 +136,13 @@ function computeTechnicalSignal(inp: SuperbrainInput): number {
   let score = 0;
 
   // CAGR quality (Indian market: >20% is excellent, >35% is exceptional)
-  if (inp.cagr >= 35)      score += 22;
-  else if (inp.cagr >= 25) score += 16;
-  else if (inp.cagr >= 15) score += 10;
-  else if (inp.cagr >= 8)  score += 4;
-  else                     score -= 4;
+  // For synthetic data, cap CAGR contribution — synthetic CAGR is unreliable
+  const effectiveCagr = inp.dataSource === 'synthetic' ? Math.min(inp.cagr, 25) : inp.cagr;
+  if (effectiveCagr >= 35)      score += 22;
+  else if (effectiveCagr >= 25) score += 16;
+  else if (effectiveCagr >= 15) score += 10;
+  else if (effectiveCagr >= 8)  score += 4;
+  else                          score -= 4;
 
   // Momentum (price vs 6m ago — >1.15 = strong uptrend)
   const mom = inp.momentum;
@@ -531,13 +534,47 @@ function computePriceTargets(
 ): { targetPrice: number | null; stopLoss: number | null; upside: number | null } {
   if (!currentPrice || currentPrice <= 0) return { targetPrice: null, stopLoss: null, upside: null };
 
-  // Target: based on CAGR projection + score premium
-  const annualReturn = (inp.cagr / 100) * (superScore / 60); // score-adjusted
-  const holdMonths = superScore >= 70 ? 12 : superScore >= 55 ? 9 : 6;
+  // ── Realistic annualised return expectation for Indian equities ──
+  // We do NOT use raw CAGR from synthetic candles — it's noise.
+  // Instead we derive a realistic expected return from the superScore alone,
+  // calibrated to Indian market historical returns (Nifty 500 CAGR ~12-14%).
+  //
+  // Score bands → expected annual return:
+  //   90-100 → 28-35%  (exceptional — top decile)
+  //   75-89  → 18-27%  (strong)
+  //   60-74  → 12-17%  (above average)
+  //   45-59  →  6-11%  (market-rate)
+  //   <45    →  0-5%   (underperform / exit)
+  //
+  // For REAL data stocks we blend in the actual CAGR (capped at 60%) with 30% weight.
+  // For SYNTHETIC stocks we use score-only (no CAGR blending — garbage in, garbage out).
+
+  const baseReturn =
+    superScore >= 90 ? 0.30 :
+    superScore >= 75 ? 0.22 :
+    superScore >= 60 ? 0.14 :
+    superScore >= 45 ? 0.08 :
+    0.03;
+
+  // Blend real CAGR only when data is trustworthy and CAGR is in a sane range
+  const realCagrPct = inp.cagr;
+  const cagrIsRealistic = inp.dataSource === 'real' && realCagrPct >= 0 && realCagrPct <= 60;
+  const annualReturn = cagrIsRealistic
+    ? baseReturn * 0.70 + (realCagrPct / 100) * 0.30
+    : baseReturn;
+
+  // Holding period: longer for high-conviction, shorter for risky/low-score
+  const holdMonths =
+    superScore >= 75 && riskScore < 50 ? 12 :
+    superScore >= 60 ? 9 :
+    6;
+
   const targetPrice = Number((currentPrice * (1 + annualReturn * holdMonths / 12)).toFixed(2));
 
-  // Stop loss: ATR-proxy using volatility
-  const stopPct = Math.max(0.05, inp.volatility * 2.5 + (riskScore / 100) * 0.08);
+  // Stop loss: ATR-proxy using actual volatility (not hardcoded)
+  // Volatility here is daily std-dev; annualise and scale by risk
+  const dailyVol = inp.volatility > 0 ? inp.volatility : 0.018; // fallback 1.8% daily
+  const stopPct = Math.max(0.04, Math.min(0.20, dailyVol * 15 + (riskScore / 100) * 0.06));
   const stopLoss = Number((currentPrice * (1 - stopPct)).toFixed(2));
 
   const upside = Number(((targetPrice - currentPrice) / currentPrice * 100).toFixed(1));
@@ -674,6 +711,7 @@ export function runSuperbrain(inp: SuperbrainInput, currentPrice?: number | null
     holdingPeriod,
     catalysts,
     risks,
+    dataSource: inp.dataSource,
   };
 }
 

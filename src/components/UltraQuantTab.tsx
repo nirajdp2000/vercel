@@ -494,17 +494,20 @@ function SuperbrainPanel({ sb, price }: { sb: NonNullable<AnalysisResult['superb
         </div>
         {sb.targetPrice && (
           <div className="rounded-lg bg-emerald-500/[0.05] border border-emerald-500/15 px-2 py-1.5">
-            <p className="text-[7px] text-zinc-500 uppercase tracking-[0.1em]">Target</p>
+            <p className="text-[7px] text-zinc-500 uppercase tracking-[0.1em]">Target {sb.dataSource === 'synthetic' ? '~' : ''}</p>
             <p className="font-black text-emerald-400">₹{sb.targetPrice.toLocaleString('en-IN')}</p>
           </div>
         )}
         {sb.stopLoss && (
           <div className="rounded-lg bg-rose-500/[0.05] border border-rose-500/15 px-2 py-1.5">
-            <p className="text-[7px] text-zinc-500 uppercase tracking-[0.1em]">Stop Loss</p>
+            <p className="text-[7px] text-zinc-500 uppercase tracking-[0.1em]">Stop Loss {sb.dataSource === 'synthetic' ? '~' : ''}</p>
             <p className="font-black text-rose-400">₹{sb.stopLoss.toLocaleString('en-IN')}</p>
           </div>
         )}
       </div>
+      {sb.dataSource === 'synthetic' && (
+        <p className="text-[8px] text-amber-500/70 italic">⚠ Price data unavailable from market — targets are score-based estimates only, not real market prices.</p>
+      )}
 
       {/* Explanation */}
       {sb.explanation.length > 0 && (
