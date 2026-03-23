@@ -2074,14 +2074,14 @@ const createUltraQuantUniverse = async (): Promise<UltraQuantProfile[]> => {
     const sendEvent = (data: object) => {
       try {
         res.write(`data: ${JSON.stringify(data)}\n\n`);
-      } catch {
+      } catch (_e) {
         // client disconnected — interval will be cleared on 'close'
       }
     };
 
     // Keep-alive comment ping every 15s to prevent proxy/browser timeout
     const heartbeatId = setInterval(() => {
-      try { res.write(`: heartbeat\n\n`); } catch { /* disconnected */ }
+      try { res.write(`: heartbeat\n\n`); } catch (_e) { /* disconnected */ }
     }, 15000);
 
     const tick = async () => {
@@ -2327,7 +2327,7 @@ Respond ONLY with this JSON structure (fill every field):
     try {
       const cleaned = rawText.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
       hedgeFundData = JSON.parse(cleaned);
-    } catch { hedgeFundData = null; }
+    } catch (_e) { hedgeFundData = null; }
 
     if (hedgeFundData) {
       res.json({
@@ -2666,7 +2666,7 @@ Respond ONLY with this JSON structure (fill every field):
           }
         }
         if (indices.length > 0) return res.json(indices);
-      } catch { /* fall through to simulated */ }
+      } catch (_e) { /* fall through to simulated */ }
     }
     // Simulated index data (deterministic, changes slowly)
     const seed = Math.floor(Date.now() / 300000); // changes every 5 min
@@ -3979,7 +3979,7 @@ Respond ONLY with this JSON structure (fill every field):
     try {
       const top50Symbols = top50.map((r: any) => r.symbol);
       realPrices = await fetchRealPricesForSymbols(top50Symbols);
-    } catch { /* non-blocking — fall back to synthetic prices */ }
+    } catch (_e) { /* non-blocking � fall back to synthetic prices */ }
 
     const top50WithRealPrices = top50.map((r: any) => {
       const live = realPrices.get(r.symbol);
@@ -4183,7 +4183,7 @@ Respond ONLY with this JSON structure (fill every field):
         price: meta.regularMarketPrice ?? meta.chartPreviousClose ?? 0,
         changePct: meta.regularMarketChangePercent ?? 0,
       };
-    } catch {
+    } catch (_e) {
       return null;
     }
   };
@@ -4226,7 +4226,7 @@ Respond ONLY with this JSON structure (fill every field):
         price: meta.regularMarketPrice ?? meta.chartPreviousClose ?? 0,
         changePct: meta.regularMarketChangePercent ?? 0,
       };
-    } catch {
+    } catch (_e) {
       return null;
     }
   };
@@ -4814,7 +4814,7 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
             if (!result) continue;
             if (result.prediction === 'Bullish') bullish.push(result);
             else bearish.push(result);
-          } catch { /* skip */ }
+          } catch (_e) { /* skip */ }
         }
       }
 
@@ -5097,7 +5097,7 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
           .from('rankings_history').select('snapshot_date')
           .order('snapshot_date', { ascending: false });
         if (!error && data) return [...new Set(data.map((r: any) => r.snapshot_date as string))];
-      } catch {}
+      } catch (_e) {}
     }
     return [...new Set(rankingsMemory.map(r => r.snapshot_date))].sort().reverse();
   }
@@ -5111,7 +5111,7 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
           .eq('snapshot_date', date)
           .order('rank', { ascending: true });
         if (!error && data) return data;
-      } catch {}
+      } catch (_e) {}
     }
     return rankingsMemory.filter(r => r.snapshot_date === date).sort((a, b) => a.rank - b.rank);
   }
@@ -5126,7 +5126,7 @@ Generate stockNews for ALL ${Math.min(15, base.rankings.length)} stocks. Generat
           .order('snapshot_date', { ascending: false })
           .limit(limit);
         if (!error && data) return data.reverse(); // oldest first for charting
-      } catch {}
+      } catch (_e) {}
     }
     return rankingsMemory
       .filter(r => r.symbol === symbol)

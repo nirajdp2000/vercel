@@ -1,26 +1,10 @@
-feat: inject real Yahoo Finance prices for top 50 NSE stocks in AI Intelligence tab
+fix: replace all bare catch{} with catch(_e){} for esbuild/Vercel compatibility
 
-server.ts:
-- New fetchRealPricesForSymbols(symbols): batch-fetches live NSE prices from Yahoo Finance
-  using .NS suffix (e.g., RELIANCE.NS). 5-min cache on trading days, 60-min on weekends.
-- In buildAIIntelligenceDashboard: after top50WithSignals is built, overlay real Yahoo prices
-  on currentPrice, priceChange, priceChangePercent for stocks where live data is available.
-  Scoring pipeline is unaffected — only display fields are updated.
-- Each stock now has priceSource: 'live' | 'synthetic' field.
-- Non-trading day zeroing also sets priceSource: 'synthetic'.
-- realPriceCache invalidated on each trading day (5-min TTL).
+esbuild on Vercel (node20 target) does not support optional catch binding (catch without
+a variable). Replaced all instances of `} catch {` with `} catch (_e) {` throughout
+server.ts to fix the build error:
 
-AIStockIntelligenceTab.tsx:
-- StockIntelligenceResult interface: added priceSource?: 'live' | 'synthetic'
-- Chg% column: shows green "LIVE" badge when priceSource === 'live'
-- Expanded row: shows current price with ₹ symbol + LIVE badge when live
-- KPIBar: new liveCount prop — shows "N Live Prices" badge in emerald when > 0
-- KPIBar render: passes liveCount from dashboard.rankings filter
+  server.ts:4229:6: ERROR: Unexpected "catch"
 
-Data sources summary:
-- Macro (VIX, Crude, USDINR, Nifty): Yahoo Finance — REAL ✓
-- News feed (6 RSS sources): Economic Times, Moneycontrol, LiveMint, etc. — REAL ✓
-- Gemini AI enrichment: Google Gemini 1.5 Flash — REAL ✓
-- Stock prices (top 50): Yahoo Finance .NS — REAL ✓ (new)
-- Scoring pipeline (quant, rally, inst, AI modules): seeded synthetic — MODEL ✓
-- Upstox ORB/VWAP: live when token set, synthetic fallback — HYBRID ✓
+Affected locations: fetchYahooQuote (x2), SSE stream heartbeat, hedgeFundData parse,
+index data fallback, real price overlay, skip blocks, and all Supabase query catch blocks.
