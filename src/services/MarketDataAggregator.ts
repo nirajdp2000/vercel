@@ -394,6 +394,15 @@ export async function enrichStocksBackground(symbols: string[]): Promise<void> {
 }
 
 /**
+ * Check if a symbol has fresh Yahoo fundamentals cached.
+ * Used by server.ts to decide whether to inline-fetch during scan.
+ */
+export function isYahooCached(symbol: string): boolean {
+  const c = yahooFundCache.get(symbol);
+  return !!(c && c.expiresAt > Date.now());
+}
+
+/**
  * Get enriched data from cache only — never triggers a network fetch.
  * Returns whatever is cached; null fields mean not yet enriched.
  * Safe to call inside the scan pipeline.

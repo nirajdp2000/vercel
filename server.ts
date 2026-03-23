@@ -16,7 +16,7 @@ import { OrbVwapEngine } from "./src/services/upstox/OrbVwapEngine";
 import { PredictionStorageService } from "./src/services/PredictionStorageService";
 import { getSupabaseClient } from "./src/lib/supabase";
 import { fetchNewsIntelligence, getStockSentiment, getTopNews, getSectorSentiment } from "./src/services/NewsIntelligenceService";
-import { enrichStocksBackground, getEnrichedFromCache, fetchFIIDIIData, computeFundamentalScore, type EnrichedStockData } from "./src/services/MarketDataAggregator";
+import { enrichStocksBackground, getEnrichedFromCache, fetchFIIDIIData, computeFundamentalScore, fetchYahooFundamentals, fetchScreenerFundamentals, isYahooCached, type EnrichedStockData } from "./src/services/MarketDataAggregator";
 import { runSuperbrain, type SuperbrainInput } from "./src/services/SuperbrainEngine";
 
 import path from "path";
@@ -1653,8 +1653,21 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
       ]);
     }
 
-    // ── Pass 3: Enrich top 50 — read from cache only (zero network, safe for Vercel) ──
+    // ── Pass 3: Enrich top 10 inline (within Vercel function lifetime) ──
+    // Fire-and-forget doesn't work on Vercel — function terminates after response.
+    // So we fetch Yahoo + Screener for top 10 uncached symbols inline, 3s hard cap.
     const top50Symbols = preSorted.slice(0, 50).map(r => r.symbol);
+    const top10Uncached = top50Symbols.filter(s => !isYahooCached(s)).slice(0, 10);
+
+    if (top10Uncached.length > 0) {
+      await Promise.race([
+        Promise.allSettled(top10Uncached.map(s =>
+          Promise.allSettled([fetchYahooFundamentals(s), fetchScreenerFundamentals(s)])
+        )),
+        new Promise<void>(r => setTimeout(r, 3000)),
+      ]);
+    }
+
     const enrichedMap = new Map<string, EnrichedStockData>(
       top50Symbols.map(s => [s, getEnrichedFromCache(s)])
     );
@@ -4062,9 +4075,17 @@ Respond ONLY with this JSON structure (fill every field):
       ]);
     }
 
-    // ── Pass 3: Enrich top 50 — read from cache only (zero network, safe for Vercel) ──
+    // ── Pass 3: Enrich top 10 inline (within Vercel function lifetime) ──
     const mbTop50Symbols = universe.slice(0, 50).map(p => p.symbol);
-    // Build enriched map from cache (no await, no network)
+    const mbTop10Uncached = mbTop50Symbols.filter(s => !isYahooCached(s)).slice(0, 10);
+    if (mbTop10Uncached.length > 0) {
+      await Promise.race([
+        Promise.allSettled(mbTop10Uncached.map(s =>
+          Promise.allSettled([fetchYahooFundamentals(s), fetchScreenerFundamentals(s)])
+        )),
+        new Promise<void>(r => setTimeout(r, 3000)),
+      ]);
+    }
     const mbEnrichedMap = new Map<string, EnrichedStockData>(
       mbTop50Symbols.map(s => [s, getEnrichedFromCache(s)])
     );
