@@ -652,54 +652,85 @@ const ultraQuantCache = new Map<string, { expiresAt: number; payload: any }>();
 const ULTRA_QUANT_CACHE_TTL = 60_000;
 const multibaggerCache = new Map<number, { expiresAt: number; payload: any }>();
 
-// ── Universe cache: starts with embedded 434, upgrades to Supabase 5000+ in background ──
-let _cachedUniverse: UltraQuantProfile[] | null = null;
-let _universeLoading = false;
+// ── Universe state — single object so startServerlessApp can access it ────────
+const _universeState = {
+  universe: null as UltraQuantProfile[] | null,
+  loading: false,
+  globalApplied: false,
+};
 
 /**
- * Get the current universe synchronously.
- * Returns embedded 434 stocks immediately on cold start.
- * After first call, triggers background Supabase load to upgrade to 5000+ stocks.
- * Subsequent calls return the upgraded universe once loaded.
+ * Seed embedded universe immediately, then upgrade to Supabase 5000+ in background.
+ * Returns current universe synchronously (never blocks).
  */
 const getUniverseSync = (): UltraQuantProfile[] => {
-  // Return cached (either embedded or Supabase-loaded)
-  if (_cachedUniverse) return _cachedUniverse;
+  if (_universeState.universe) return _universeState.universe;
 
   // Seed with embedded universe immediately
-  _cachedUniverse = NSE_STOCK_UNIVERSE.map(s => ({
+  _universeState.universe = NSE_STOCK_UNIVERSE.map(s => ({
     symbol: s.symbol, sector: s.sector, industry: s.industry,
     marketCap: s.marketCap, averageVolume: s.averageVolume,
   }));
 
-  // Trigger background Supabase load if not already running
-  if (!_universeLoading) {
-    _universeLoading = true;
-    getUniverseAsync().then(stocks => {
-      if (stocks.length > _cachedUniverse!.length) {
+  return _universeState.universe;
+};
+
+/**
+ * Load Supabase universe with a timeout. Updates _universeState.universe in place.
+ * Safe to call from startServerlessApp — uses only _universeState (no closure vars).
+ */
+const loadSupabaseUniverse = async (timeoutMs = 6000): Promise<void> => {
+  if (_universeState.loading) return;
+  _universeState.loading = true;
+  try {
+    const loaded = getUniverseAsync().then(stocks => {
+      if (stocks.length > 0) {
         const curatedMap = new Map(NSE_STOCK_UNIVERSE.map(s => [s.symbol, s]));
-        _cachedUniverse = stocks.map(s => {
+        _universeState.universe = stocks.map(s => {
           const c = curatedMap.get(s.symbol);
           return {
             symbol:        s.symbol,
             sector:        c?.sector  || s.sector  || 'Unknown',
             industry:      c?.industry || s.industry || 'Unknown',
-            marketCap:     c?.marketCap     || (s.marketCap     > 0 ? s.marketCap     : 1000),
+            marketCap:     c?.marketCap || (s.marketCap > 0 ? s.marketCap : 1000),
             averageVolume: c?.averageVolume || (s.averageVolume > 0 ? s.averageVolume : 100000),
           };
         });
         // Invalidate scan caches so next request uses full universe
         ultraQuantCache.clear();
         multibaggerCache.clear();
-        console.log(`[Universe] Upgraded to ${_cachedUniverse.length} stocks from Supabase`);
+        console.log(`[Universe] Loaded ${_universeState.universe.length} stocks from Supabase`);
       }
-    }).catch(() => {}).finally(() => { _universeLoading = false; });
+    });
+    await Promise.race([loaded, new Promise<void>(r => setTimeout(r, timeoutMs))]);
+  } catch (_e) { /* keep embedded */ } finally {
+    _universeState.loading = false;
   }
-
-  return _cachedUniverse;
 };
 
-const createUltraQuantUniverse = (): UltraQuantProfile[] => getUniverseSync();
+const createUltraQuantUniverse = (): UltraQuantProfile[] => {
+  // Check if startServerlessApp pre-loaded Supabase universe into global
+  const globalUniverse = (global as any).__supabaseUniverse as Array<{ symbol: string; sector: string; industry: string; marketCap: number; averageVolume: number }> | undefined;
+  if (globalUniverse && globalUniverse.length > 0 && !_universeState.globalApplied) {
+    const curatedMap = new Map(NSE_STOCK_UNIVERSE.map(s => [s.symbol, s]));
+    _universeState.universe = globalUniverse.map(s => {
+      const c = curatedMap.get(s.symbol);
+      return {
+        symbol:        s.symbol,
+        sector:        c?.sector  || s.sector  || 'Unknown',
+        industry:      c?.industry || s.industry || 'Unknown',
+        marketCap:     c?.marketCap || (s.marketCap > 0 ? s.marketCap : 1000),
+        averageVolume: c?.averageVolume || (s.averageVolume > 0 ? s.averageVolume : 100000),
+      };
+    });
+    _universeState.globalApplied = true;
+    ultraQuantCache.clear();
+    multibaggerCache.clear();
+    console.log(`[Universe] Applied ${_universeState.universe.length} stocks from global pre-load`);
+  }
+  if (!_universeState.universe) getUniverseSync();
+  return _universeState.universe!;
+};
 
 
   const buildReturns = (prices: number[]) => {
@@ -3879,7 +3910,7 @@ Respond ONLY with this JSON structure (fill every field):
 
     const avgBullishScore = top100.reduce((sum, s) => sum + s.bullishScore, 0) / top100.length;
 
-    const totalLoaded = universe.length;
+    const totalLoaded = fullUniverse.length;
     const totalProcessed = scored.length;
     const totalAfterFilter = scored.length; // no hard filter in multibagger
     const totalReturned = top100.length;
@@ -3887,7 +3918,7 @@ Respond ONLY with this JSON structure (fill every field):
 
     const payload = {
       cycle:           cycleDays,
-      scannedUniverse: universe.length,
+      scannedUniverse: fullUniverse.length,
       returned:        top100.length,
       stocks:          top100,
       leadingSector,
@@ -5815,11 +5846,20 @@ async function startServer() {
 
 // ── Serverless export for Vercel ──────────────────────────────────────────────
 export async function startServerlessApp() {
-  const app = await buildApp();
-  // Fire universe load in background — scan uses embedded universe, doesn't need Supabase
-  initUniverse().catch(err =>
-    console.warn('[StockUniverseService] Background init failed:', err.message)
-  );
+  // Pre-load Supabase universe into global so buildApp's createUltraQuantUniverse can use it.
+  // getUniverseAsync IS accessible here (top-level import). We race against 6s timeout.
+  const universeLoad = getUniverseAsync().then(stocks => {
+    if (stocks.length > 0) {
+      (global as any).__supabaseUniverse = stocks;
+      console.log(`[Universe] Pre-loaded ${stocks.length} stocks into global`);
+    }
+  }).catch(() => {});
+
+  const [app] = await Promise.all([
+    buildApp(),
+    Promise.race([universeLoad, new Promise<void>(r => setTimeout(r, 6000))]),
+  ]);
+
   return app;
 }
 

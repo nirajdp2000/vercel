@@ -1,20 +1,11 @@
-feat: 5000+ stock universe with lazy loading — zero timeout
+fix: load 5221-stock universe via global bridge (CJS scope fix)
 
-Architecture:
-- getUniverseSync(): returns embedded 434 stocks instantly on cold start
-- Background Supabase load upgrades to 5221 stocks after ~3-5s
-- Scan caches invalidated on upgrade → next request uses full universe
-- ultraQuantCache + multibaggerCache moved to module level (shared across requests)
-
-Performance:
-- Pass 1 pre-sort: O(1) hash-based scoring per stock (no candle simulation)
-  handles 5000+ stocks in <5ms vs previous 1260-day candle loop
-- Full analyzeUltraQuantProfile only on top 100 candidates
-- Cold scan: ~200ms (434 stocks)
-- Warm scan after Supabase load: ~120ms (5221 stocks)
-- Multibagger warm: ~46ms
-
-Tested locally:
-- All 4 scan tests pass (cold + warm, UltraQuant + Multibagger)
-- No timeouts, all under 200ms response time
-- Universe shows 5221 after background load
+- startServerlessApp pre-loads Supabase universe into global.__supabaseUniverse
+  using getUniverseAsync (top-level import, accessible across CJS bundle scope)
+- createUltraQuantUniverse reads global.__supabaseUniverse on first call,
+  applies curated metadata, clears caches, sets globalApplied flag
+- Fixes ReferenceError: getUniverseSync/loadSupabaseUniverse not defined
+  (esbuild CJS bundle places those consts inside buildApp() closure)
+- Both UltraQuant and Multibagger tabs now show 5221 stocks (was 434)
+- scannedUniverse in multibagger response now uses fullUniverse.length (5221)
+- startServerlessApp completes in ~1.5s locally, all scans <200ms
