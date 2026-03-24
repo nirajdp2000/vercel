@@ -714,12 +714,13 @@ const loadSupabaseUniverse = async (timeoutMs = 6000): Promise<void> => {
 };
 
 const createUltraQuantUniverse = (): UltraQuantProfile[] => {
-  // Fast path: return memoised result if universe hasn't changed
-  if (_cachedUniverse) return _cachedUniverse;
+  // Fast path: return memoised result — but only if it's the full Supabase universe (>440 stocks)
+  // If cached is only the fallback (434), re-check in case Supabase data arrived since last call
+  if (_cachedUniverse && _cachedUniverse.length > 440) return _cachedUniverse;
 
   // Check if startServerlessApp pre-loaded Supabase universe into global
   const globalUniverse = (global as any).__supabaseUniverse as Array<{ symbol: string; sector: string; industry: string; marketCap: number; averageVolume: number }> | undefined;
-  if (globalUniverse && globalUniverse.length > 0 && !_universeState.globalApplied) {
+  if (globalUniverse && globalUniverse.length > 440) {
     const curatedMap = new Map(NSE_STOCK_UNIVERSE.map(s => [s.symbol, s]));
     _universeState.universe = globalUniverse.map(s => {
       const c = curatedMap.get(s.symbol);
@@ -734,8 +735,9 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
     _universeState.globalApplied = true;
     ultraQuantCache.clear();
     multibaggerCache.clear();
-    _cachedUniverse = null; // force rebuild on next call after universe change
-    console.log(`[Universe] Applied ${_universeState.universe.length} stocks from global pre-load`);
+    _cachedUniverse = _universeState.universe;
+    console.log(`[Universe] Applied ${_cachedUniverse.length} stocks from global pre-load`);
+    return _cachedUniverse;
   }
   if (!_universeState.universe) getUniverseSync();
   _cachedUniverse = _universeState.universe!;
@@ -6270,6 +6272,8 @@ export async function startServerlessApp() {
   const universeLoad = getUniverseAsync().then(stocks => {
     if (stocks.length > 0) {
       (global as any).__supabaseUniverse = stocks;
+      // Invalidate memoised universe so next createUltraQuantUniverse() call picks up Supabase data
+      _cachedUniverse = null;
       console.log(`[Universe] Pre-loaded ${stocks.length} stocks into global`);
 
       // ── Pre-warm OHLCV + enrichment for top 100 symbols at startup ──
