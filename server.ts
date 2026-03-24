@@ -4325,8 +4325,8 @@ Respond ONLY with this JSON structure (fill every field):
 
     console.log(`[EOD Refresh] Starting for ${symbols.length} symbols`);
 
-    // ── Batch 1: OHLCV (range=2y) — 10 at a time with 500ms gap ──
-    const OHLCV_BATCH = 10;
+    // ── Batch 1: OHLCV (range=2y) — 5 at a time with 200ms gap (Vercel 10s safe) ──
+    const OHLCV_BATCH = 5;
     for (let i = 0; i < symbols.length; i += OHLCV_BATCH) {
       const batch = symbols.slice(i, i + OHLCV_BATCH);
       await Promise.allSettled(batch.map(async sym => {
@@ -4341,7 +4341,7 @@ Respond ONLY with this JSON structure (fill every field):
           }
         } catch (_e) { results.ohlcvFail++; }
       }));
-      if (i + OHLCV_BATCH < symbols.length) await new Promise(r => setTimeout(r, 500));
+      if (i + OHLCV_BATCH < symbols.length) await new Promise(r => setTimeout(r, 200));
     }
 
     // ── Batch 2: Yahoo fundamentals (price + PE + 52W) — 10 at a time ──
