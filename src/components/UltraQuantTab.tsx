@@ -566,11 +566,14 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
           if (data.yahoo?.weekLow52  != null) patch.weekLow52  = data.yahoo.weekLow52;
           if (data.yahoo?.pe         != null) patch.pe         = data.yahoo.pe;
           if (data.yahoo?.pChange    != null) patch.pChange    = data.yahoo.pChange;
+          if (data.yahoo?.lastPrice  != null) patch.currentPrice = data.yahoo.lastPrice;
           if (data.screener?.roe     != null) patch.roe        = data.screener.roe;
           if (data.screener?.roce    != null) patch.roce       = data.screener.roce;
+          if (data.screener?.pe      != null && data.yahoo?.pe == null) patch.pe = data.screener.pe;
           if (data.screener?.debtToEquity    != null) patch.debtToEquity    = data.screener.debtToEquity;
           if (data.screener?.promoterHolding != null) patch.promoterHolding = data.screener.promoterHolding;
-          // Update dataQuality based on what we got
+          // Update dataSource/dataQuality based on what we got
+          if (data.yahoo?.lastPrice != null) patch.dataSource = 'real';
           if (data.screener?.roe != null || data.screener?.roce != null) patch.dataQuality = 'HIGH';
           else if (data.yahoo?.lastPrice != null) patch.dataQuality = 'MEDIUM';
           if (Object.keys(patch).length > 0) {
@@ -668,7 +671,9 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-white/[0.04]">
-            {filtered.map((stock, i) => (
+            {filtered.map((rawStock, i) => {
+              const stock = { ...rawStock, ...(enrichCache[rawStock.symbol] ?? {}) } as typeof rawStock;
+              return (
               <React.Fragment key={stock.symbol}>
                 <tr
                   onClick={() => handleExpand(stock.symbol)}
@@ -724,8 +729,8 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
                   </td>
                 </tr>
                 {expanded === stock.symbol && (() => {
-                  // Merge enrichCache into a display copy — triggers re-render when enrichCache updates
-                  const s = { ...stock, ...(enrichCache[stock.symbol] ?? {}) };
+                  // stock already has enrichCache merged (from map above)
+                  const s = stock;
                   return (
                   <tr className="bg-cyan-500/[0.03] border-b border-cyan-500/10">
                     <td colSpan={11} className="px-4 py-4">
@@ -794,7 +799,8 @@ function StockTable({ results }: { results: AnalysisResult[] }) {
                   );
                 })()}
               </React.Fragment>
-            ))}
+              );
+            })}
           </tbody>
         </table>
         {filtered.length === 0 && (
