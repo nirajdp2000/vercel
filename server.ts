@@ -4312,7 +4312,6 @@ Respond ONLY with this JSON structure (fill every field):
     const expectedSecret = process.env.ADMIN_SECRET || 'stockpulse-eod';
     if (secret !== expectedSecret) return res.status(401).json({ error: 'Unauthorized' });
 
-    const startTime = Date.now();
     const universe = createUltraQuantUniverse();
 
     // Use provided symbols or default to top 150 by marketCap
@@ -4323,64 +4322,58 @@ Respond ONLY with this JSON structure (fill every field):
     const symbols = [...new Set(rawSymbols)]; // dedupe
     const results = { total: symbols.length, ohlcvOk: 0, ohlcvFail: 0, fundOk: 0, fundFail: 0, screenerOk: 0, screenerFail: 0 };
 
-    console.log(`[EOD Refresh] Starting for ${symbols.length} symbols`);
+    console.log(`[EOD Refresh] Queued ${symbols.length} symbols — responding immediately, work runs fire-and-forget`);
 
-    // ── Batch 1: OHLCV (range=2y) — 5 at a time with 200ms gap (Vercel 10s safe) ──
-    const OHLCV_BATCH = 5;
-    for (let i = 0; i < symbols.length; i += OHLCV_BATCH) {
-      const batch = symbols.slice(i, i + OHLCV_BATCH);
-      await Promise.allSettled(batch.map(async sym => {
-        try {
-          const candles = await fetchRealOHLCV(sym);
-          if (candles && candles.length >= 60) {
-            const cached = realOHLCVCache.get(sym);
-            await writeOHLCVToSupabase(sym, candles, cached?.livePrice ?? null, cached?.changePct ?? null);
-            results.ohlcvOk++;
-          } else {
-            results.ohlcvFail++;
-          }
-        } catch (_e) { results.ohlcvFail++; }
-      }));
-      if (i + OHLCV_BATCH < symbols.length) await new Promise(r => setTimeout(r, 200));
-    }
+    // ── Respond immediately — all batches run fire-and-forget (Vercel timeout safe) ──
+    res.json({ ok: true, queued: symbols.length, symbols, message: 'EOD refresh started in background' });
 
-    // ── Batch 2: Yahoo fundamentals (price + PE + 52W) — 10 at a time ──
-    const FUND_BATCH = 10;
-    for (let i = 0; i < symbols.length; i += FUND_BATCH) {
-      const batch = symbols.slice(i, i + FUND_BATCH);
-      await Promise.allSettled(batch.map(async sym => {
-        try {
-          await fetchYahooFundamentals(sym);
-          results.fundOk++;
-        } catch (_e) { results.fundFail++; }
-      }));
-      if (i + FUND_BATCH < symbols.length) await new Promise(r => setTimeout(r, 300));
-    }
+    // ── All work below runs after response is sent ──
+    (async () => {
+      const startTime = Date.now();
 
-    // ── Batch 3: Screener fundamentals (ROE/ROCE/PE/Promoter%) — top 50 only, 3 at a time ──
-    // Screener HTML scraping is slower — only top 50 by marketCap, fire-and-forget after response
-    const screenerSymbols = symbols.slice(0, 50);
-    const screenerPromise = (async () => {
-      const SCREENER_BATCH = 3;
-      for (let i = 0; i < screenerSymbols.length; i += SCREENER_BATCH) {
-        const batch = screenerSymbols.slice(i, i + SCREENER_BATCH);
+      // Batch 1: OHLCV (range=2y) — 3 at a time, 300ms gap
+      const OHLCV_BATCH = 3;
+      for (let i = 0; i < symbols.length; i += OHLCV_BATCH) {
+        const batch = symbols.slice(i, i + OHLCV_BATCH);
         await Promise.allSettled(batch.map(async sym => {
           try {
-            await fetchScreenerFundamentals(sym);
-            results.screenerOk++;
-          } catch (_e) { results.screenerFail++; }
+            const candles = await fetchRealOHLCV(sym);
+            if (candles && candles.length >= 60) {
+              const cached = realOHLCVCache.get(sym);
+              await writeOHLCVToSupabase(sym, candles, cached?.livePrice ?? null, cached?.changePct ?? null);
+              results.ohlcvOk++;
+            } else { results.ohlcvFail++; }
+          } catch (_e) { results.ohlcvFail++; }
         }));
-        if (i + SCREENER_BATCH < screenerSymbols.length) await new Promise(r => setTimeout(r, 600));
+        if (i + OHLCV_BATCH < symbols.length) await new Promise(r => setTimeout(r, 300));
       }
-    })();
 
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`[EOD Refresh] OHLCV+Yahoo done in ${elapsed}s — OHLCV: ${results.ohlcvOk}ok/${results.ohlcvFail}fail, Fund: ${results.fundOk}ok/${results.fundFail}fail`);
-    logAction('eod_refresh.completed', { ...results, elapsedSec: elapsed });
-    // Respond immediately — Screener batch continues in background (fire-and-forget)
-    res.json({ ok: true, elapsed: `${elapsed}s`, results, screenerPending: screenerSymbols.length });
-    // Wait for screener to finish (non-blocking for client, but keeps process alive)
-    screenerPromise.catch(() => {});
+      // Batch 2: Yahoo fundamentals (price + PE + 52W) — 5 at a time, 200ms gap
+      const FUND_BATCH = 5;
+      for (let i = 0; i < symbols.length; i += FUND_BATCH) {
+        const batch = symbols.slice(i, i + FUND_BATCH);
+        await Promise.allSettled(batch.map(async sym => {
+          try { await fetchYahooFundamentals(sym); results.fundOk++; }
+          catch (_e) { results.fundFail++; }
+        }));
+        if (i + FUND_BATCH < symbols.length) await new Promise(r => setTimeout(r, 200));
+      }
+
+      // Batch 3: Screener (ROE/ROCE/PE/Promoter%) — all symbols, 3 at a time, 600ms gap
+      const SCREENER_BATCH = 3;
+      for (let i = 0; i < symbols.length; i += SCREENER_BATCH) {
+        const batch = symbols.slice(i, i + SCREENER_BATCH);
+        await Promise.allSettled(batch.map(async sym => {
+          try { await fetchScreenerFundamentals(sym); results.screenerOk++; }
+          catch (_e) { results.screenerFail++; }
+        }));
+        if (i + SCREENER_BATCH < symbols.length) await new Promise(r => setTimeout(r, 600));
+      }
+
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      console.log(`[EOD Refresh] Done in ${elapsed}s — OHLCV: ${results.ohlcvOk}ok/${results.ohlcvFail}fail, Fund: ${results.fundOk}ok/${results.fundFail}fail, Screener: ${results.screenerOk}ok/${results.screenerFail}fail`);
+      logAction('eod_refresh.completed', { ...results, elapsedSec: elapsed });
+    })().catch(e => console.error('[EOD Refresh] background error:', e));
   });
 
   /** GET /api/admin/refresh-eod/status — Check when last EOD refresh ran */
