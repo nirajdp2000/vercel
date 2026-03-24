@@ -472,7 +472,10 @@ export function isYahooCached(symbol: string): boolean {
  * Falls back gracefully if Supabase is unavailable.
  * ~50ms for any number of symbols — replaces per-symbol live fetching on cold start.
  */
-export async function loadFundamentalsFromSupabase(symbols: string[]): Promise<void> {
+export async function loadFundamentalsFromSupabase(
+  symbols: string[],
+  setPriceCache?: (symbol: string, price: number, changePct: number) => void
+): Promise<void> {
   // Only fetch symbols not already in memory cache
   const missing = symbols.filter(s => !isYahooCached(s));
   if (missing.length === 0 || supabaseTableMissing) return;
@@ -501,6 +504,10 @@ export async function loadFundamentalsFromSupabase(symbols: string[]): Promise<v
       };
       if (yahoo.lastPrice) {
         yahooFundCache.set(symbol, { data: yahoo, expiresAt: now + YAHOO_FUND_TTL });
+        // Also populate perSymbolPriceCache so Superbrain gets price for all symbols
+        if (setPriceCache && yahoo.lastPrice > 0) {
+          setPriceCache(symbol, yahoo.lastPrice, yahoo.pChange ?? 0);
+        }
       }
     }
     // Populate Screener cache

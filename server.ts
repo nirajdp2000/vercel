@@ -1654,8 +1654,11 @@ const createUltraQuantUniverse = (): UltraQuantProfile[] => {
     const top50Symbols = preSorted.slice(0, 50).map(r => r.symbol);
     const fundMissing = top50Symbols.filter(s => !isYahooCached(s));
     if (fundMissing.length > top50Symbols.length * 0.2) {
+      const setPriceCache = (sym: string, price: number, changePct: number) => {
+        perSymbolPriceCache.set(sym, { price, changePct, expiresAt: Date.now() + 60 * 60_000 });
+      };
       await Promise.race([
-        loadFundamentalsFromSupabase(fundMissing),
+        loadFundamentalsFromSupabase(fundMissing, setPriceCache),
         new Promise<void>(r => setTimeout(r, 1500)),
       ]);
     }
@@ -4053,8 +4056,11 @@ Respond ONLY with this JSON structure (fill every field):
     const mbTop50Symbols = universe.slice(0, 50).map(p => p.symbol);
     const mbFundMissing = mbTop50Symbols.filter(s => !isYahooCached(s));
     if (mbFundMissing.length > mbTop50Symbols.length * 0.2) {
+      const mbSetPriceCache = (sym: string, price: number, changePct: number) => {
+        perSymbolPriceCache.set(sym, { price, changePct, expiresAt: Date.now() + 60 * 60_000 });
+      };
       await Promise.race([
-        loadFundamentalsFromSupabase(mbFundMissing),
+        loadFundamentalsFromSupabase(mbFundMissing, mbSetPriceCache),
         new Promise<void>(r => setTimeout(r, 1500)),
       ]);
     }
@@ -4315,7 +4321,7 @@ Respond ONLY with this JSON structure (fill every field):
       : universe.sort((a, b) => b.marketCap - a.marketCap).slice(0, 150).map(p => p.symbol);
 
     const symbols = [...new Set(rawSymbols)]; // dedupe
-    const results = { total: symbols.length, ohlcvOk: 0, ohlcvFail: 0, fundOk: 0, fundFail: 0 };
+    const results = { total: symbols.length, ohlcvOk: 0, ohlcvFail: 0, fundOk: 0, fundFail: 0, screenerOk: 0, screenerFail: 0 };
 
     console.log(`[EOD Refresh] Starting for ${symbols.length} symbols`);
 
@@ -4338,7 +4344,7 @@ Respond ONLY with this JSON structure (fill every field):
       if (i + OHLCV_BATCH < symbols.length) await new Promise(r => setTimeout(r, 500));
     }
 
-    // ── Batch 2: Yahoo fundamentals — 10 at a time ──
+    // ── Batch 2: Yahoo fundamentals (price + PE + 52W) — 10 at a time ──
     const FUND_BATCH = 10;
     for (let i = 0; i < symbols.length; i += FUND_BATCH) {
       const batch = symbols.slice(i, i + FUND_BATCH);
@@ -4351,10 +4357,30 @@ Respond ONLY with this JSON structure (fill every field):
       if (i + FUND_BATCH < symbols.length) await new Promise(r => setTimeout(r, 300));
     }
 
+    // ── Batch 3: Screener fundamentals (ROE/ROCE/PE/Promoter%) — top 50 only, 3 at a time ──
+    // Screener HTML scraping is slower — only top 50 by marketCap, fire-and-forget after response
+    const screenerSymbols = symbols.slice(0, 50);
+    const screenerPromise = (async () => {
+      const SCREENER_BATCH = 3;
+      for (let i = 0; i < screenerSymbols.length; i += SCREENER_BATCH) {
+        const batch = screenerSymbols.slice(i, i + SCREENER_BATCH);
+        await Promise.allSettled(batch.map(async sym => {
+          try {
+            await fetchScreenerFundamentals(sym);
+            results.screenerOk++;
+          } catch (_e) { results.screenerFail++; }
+        }));
+        if (i + SCREENER_BATCH < screenerSymbols.length) await new Promise(r => setTimeout(r, 600));
+      }
+    })();
+
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`[EOD Refresh] Done in ${elapsed}s — OHLCV: ${results.ohlcvOk}ok/${results.ohlcvFail}fail, Fund: ${results.fundOk}ok/${results.fundFail}fail`);
+    console.log(`[EOD Refresh] OHLCV+Yahoo done in ${elapsed}s — OHLCV: ${results.ohlcvOk}ok/${results.ohlcvFail}fail, Fund: ${results.fundOk}ok/${results.fundFail}fail`);
     logAction('eod_refresh.completed', { ...results, elapsedSec: elapsed });
-    res.json({ ok: true, elapsed: `${elapsed}s`, results });
+    // Respond immediately — Screener batch continues in background (fire-and-forget)
+    res.json({ ok: true, elapsed: `${elapsed}s`, results, screenerPending: screenerSymbols.length });
+    // Wait for screener to finish (non-blocking for client, but keeps process alive)
+    screenerPromise.catch(() => {});
   });
 
   /** GET /api/admin/refresh-eod/status — Check when last EOD refresh ran */

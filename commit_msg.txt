@@ -1,4 +1,9 @@
-fix: cap Pass 0 Supabase query to top 200 symbols by marketCap
+fix: Superbrain price + ROE/ROCE/PE in DB for all symbols
 
-Querying all 5000+ universe symbols caused Vercel timeout.
-Now only queries top 200 (the ones EOD batch refreshes) — fast and sufficient.
+- loadFundamentalsFromSupabase now accepts setPriceCache callback
+  → populates perSymbolPriceCache from last_price in DB
+  → Superbrain gets real price for all symbols, not just top 50
+- EOD refresh now fetches Screener (ROE/ROCE/PE/Promoter%) for top 50
+  → responds immediately, Screener batch runs fire-and-forget
+  → fundamentals_cache gets complete data on each daily refresh
+- Both scan pipelines pass setPriceCache to loadFundamentalsFromSupabase
